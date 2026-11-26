@@ -37,7 +37,7 @@ felismeres = ["id", "name"]
 
 [vevok.oszlopok]
 id               = "Vevő"
-name             = "Kiválasztás"       # ha a Név oszlop a pontos cégnév: "Név"
+name             = "Név"       # ha a Név oszlop a pontos cégnév: "Név"
 search_term      = "Keresőfogalom"
 account_manager  = "Ügyintéző"
 created          = "FelvDátum"         # 4 FelvDátum oszlop van – ellenőrizze, melyik a vevőé (#2, #3, #4)

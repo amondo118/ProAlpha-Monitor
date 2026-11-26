@@ -86,7 +86,8 @@
 "31" = "Románia"
 "32" = "Skandináv"
 "33" = "Törökország"
-
+"34" = "n/a"
+"35" = "n/a"
 
 # FizM: fizetési mód. Amíg ez a lista üres, az oldalon a nyers kód látszik
 # (figyelmeztetés nélkül). Töltse ki az SAP táblából, például:
