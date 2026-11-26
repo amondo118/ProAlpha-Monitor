@@ -267,6 +267,8 @@ function applyStaticText() {
   document.title = t("app.title");
   document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
   $("#lang").value = LANG;
+  $("#theme").value = document.documentElement.dataset.theme || "auto";
+  $("#theme").setAttribute("aria-label", t("theme"));
   $("#detail-close").setAttribute("aria-label", t("d.close"));
   $("#global-q").placeholder = t("search.placeholder", { id: S.customers[0]?.id ?? "3000095" });
 }
@@ -1017,6 +1019,15 @@ $("#detail").addEventListener("close", () => {
 });
 $("#detail").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 window.addEventListener("hashchange", route);
+
+/* Theme: "auto" follows the OS setting (the default); light/dark override it.
+   The colours are CSS variables, so no re-render is needed. */
+$("#theme").addEventListener("change", (e) => {
+  const v = e.target.value;
+  if (v === "light" || v === "dark") document.documentElement.dataset.theme = v;
+  else delete document.documentElement.dataset.theme;
+  try { if (v === "auto") localStorage.removeItem("theme"); else localStorage.setItem("theme", v); } catch { /* not saved */ }
+});
 
 $("#lang").addEventListener("change", (e) => {
   setLang(e.target.value);

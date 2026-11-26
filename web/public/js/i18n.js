@@ -9,6 +9,10 @@ const I18N = {
   hu: {
     "app.title": "ProAlpha Monitor",
     "lang": "Nyelv",
+    "theme": "Téma",
+    "theme.auto": "Automatikus",
+    "theme.light": "Világos",
+    "theme.dark": "Sötét",
     "fake": "MINTA",
     "fakeNotice": "Mintaadatok: kitalált vevők és számlák. Élesben ugyanez az oldal a napi SAP exportokból töltődik.",
     "freshness": "Adatok: {date} ({ago})",
@@ -165,6 +169,10 @@ const I18N = {
   en: {
     "app.title": "ProAlpha Monitor",
     "lang": "Language",
+    "theme": "Theme",
+    "theme.auto": "Automatic",
+    "theme.light": "Light",
+    "theme.dark": "Dark",
     "fake": "SAMPLE",
     "fakeNotice": "Sample data: invented customers and invoices. In production this page is filled from the daily SAP exports.",
     "freshness": "Data as of {date} ({ago})",

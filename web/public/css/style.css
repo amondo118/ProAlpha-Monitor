@@ -116,7 +116,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .topbar-right { display: flex; align-items: center; gap: 12px; color: var(--text-2); font-size: 13px; margin-left: auto; flex-wrap: wrap; }
 .tag { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   background: var(--tag-bg); color: var(--tag-text); padding: 3px 8px; border-radius: 6px; }
-.lang select { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 4px 6px; }
+.lang select, select.theme { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 4px 6px; }
 
 .tabs { display: flex; gap: 4px; overflow-x: auto; }
 .tabs a { padding: 10px 2px; margin-right: 18px; color: var(--text-2); border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 600; }
