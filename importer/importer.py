@@ -295,6 +295,7 @@ def run_import(files):
         "fake": fake,
         "sources": sources,
         "checks": control_totals(data),
+        "periods": cfg["periods"],   # fiscal year start + shared periods (config/idoszakok.toml)
         "warnings": warnings[:500],
         "warning_count": len(warnings),
     }

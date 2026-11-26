@@ -223,6 +223,30 @@ class ImporterTest(Base):
 
 
 
+class PeriodConfigTest(Base):
+    """config/idoszakok.toml: fiscal year start and shared periods."""
+
+    def periods(self, text):
+        (self.dir / "idoszakok.toml").write_text(text, encoding="utf-8")
+        return datasets.load_config(self.dir)["periods"]
+
+    def test_missing_file_means_calendar_year_and_no_shared_periods(self):
+        self.assertEqual(datasets.load_config(self.dir)["periods"], {"fiscal_start": 1, "shared": []})
+
+    def test_shared_periods_and_fiscal_start(self):
+        p = self.periods('uzleti_ev_kezdete = 7\n[[idoszak]]\nnev = "2026 szezon"\nkezdete = 2026-03-01\nvege = 2026-09-30\n'
+                         '[[idoszak]]\nnev = "Ősz"\nkezdete = "2026.09.01"\nvege = "2026.11.30"\n')
+        self.assertEqual(p["fiscal_start"], 7)
+        self.assertEqual([(x["name"], x["from"], x["to"]) for x in p["shared"]],
+                         [("2026 szezon", "2026-03-01", "2026-09-30"), ("Ősz", "2026-09-01", "2026-11-30")])
+
+    def test_mistakes_are_reported(self):
+        for text in ("uzleti_ev_kezdete = 13\n", '[[idoszak]]\nnev = "X"\nkezdete = 2026-05-01\nvege = 2026-04-01\n',
+                     '[[idoszak]]\nnev = "X"\nkezdete = "tavasz"\nvege = 2026-04-01\n', '[[idoszak]]\nkezdete = 2026-05-01\n'):
+            with self.assertRaises(datasets.ConfigError):
+                self.periods(text)
+
+
 class DocumentTypeTest(Base):
     """The real export mixes invoices, offers, delivery notes … in one file;
     only the BF column tells them apart."""

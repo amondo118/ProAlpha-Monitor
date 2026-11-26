@@ -53,7 +53,7 @@ class ConfigError(Exception):
 
 
 def load_config(config_dir):
-    """Read and check both config files. Raises ConfigError with a readable message."""
+    """Read and check the config files. Raises ConfigError with a readable message."""
     config_dir = Path(config_dir)
     try:
         cols = tomllib.loads((config_dir / "oszlopok.toml").read_text(encoding="utf-8"))
@@ -76,7 +76,50 @@ def load_config(config_dir):
     # Code lists: normalise keys once ("05" -> "5")
     lists = {k: {norm_code(c): str(v) for c, v in table.items()} for k, table in codes.items()}
     markers = [fold(m) for m in cols.get("zarolt", {}).get("jelzok", []) if str(m).strip()]
-    return {"columns": cols, "codes": lists, "blocked_markers": markers}
+    periods = load_periods(config_dir / "idoszakok.toml")
+    return {"columns": cols, "codes": lists, "blocked_markers": markers, "periods": periods}
+
+
+def load_periods(path):
+    """config/idoszakok.toml (optional): the fiscal year's first month and the
+    periods shared by everyone. -> {"fiscal_start": 1..12, "shared": [{id, name, from, to}]}"""
+    from datetime import date
+    from sap_parse import parse_date
+    if not path.is_file():
+        return {"fiscal_start": 1, "shared": []}
+    try:
+        cfg = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"{path.name}: syntax error: {e}")
+    start = cfg.get("uzleti_ev_kezdete", 1)
+    if not isinstance(start, int) or isinstance(start, bool) or not 1 <= start <= 12:
+        raise ConfigError(f"{path.name}: uzleti_ev_kezdete must be a month number 1–12, got {start!r}")
+
+    def as_date(value, what):
+        if isinstance(value, date):
+            return value.isoformat()
+        try:
+            d = parse_date(str(value))
+        except ValueError:
+            d = None
+        if not d:
+            raise ConfigError(f"{path.name}: '{what}' is not a date: {value!r} (use 2026-03-01)")
+        return d
+
+    shared, seen = [], set()
+    for n, p in enumerate(cfg.get("idoszak", []), start=1):
+        name = str(p.get("nev", "")).strip()
+        if not name or "kezdete" not in p or "vege" not in p:
+            raise ConfigError(f"{path.name}: period #{n} needs nev, kezdete and vege")
+        start_d, end_d = as_date(p["kezdete"], f"{name} kezdete"), as_date(p["vege"], f"{name} vege")
+        if start_d > end_d:
+            raise ConfigError(f"{path.name}: period '{name}' starts after it ends")
+        pid = f"{n}-" + "".join(ch for ch in fold(name).lower() if ch.isalnum())[:24]
+        if pid in seen:
+            raise ConfigError(f"{path.name}: period '{name}' appears twice")
+        seen.add(pid)
+        shared.append({"id": pid, "name": name, "from": start_d, "to": end_d})
+    return {"fiscal_start": start, "shared": shared}
 
 
 def norm_code(code):

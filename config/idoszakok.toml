@@ -1,0 +1,30 @@
+# =============================================================================
+#  KÖZÖS IDŐSZAKOK ÉS ÜZLETI ÉV – ezt a fájlt kézzel szerkesztheti
+# =============================================================================
+#
+#  Ami itt szerepel, az mindenkinek megjelenik a fejléc időszak-választójában
+#  („Közös időszakok”). Saját, csak a saját böngészőben látható időszakot az
+#  oldal ⚙ Beállítások menüjében lehet felvenni.
+#  Mentés után az importáló egy percen belül újra beolvassa; hibás fájlnál a régi
+#  adatok maradnak, a hiba a naplóban látszik:  docker compose logs importer
+# =============================================================================
+
+
+# Az üzleti év kezdő hónapja (1 = január … 12 = december).
+# Ehhez igazodik az „Idei év”, a „Tavalyi év”, a negyedévek, a félévek és a
+# 2–3 éves időszakok. Pl. júliusi kezdetnél: uzleti_ev_kezdete = 7
+uzleti_ev_kezdete = 1
+
+
+# Közös időszakok: mindegyik egy [[idoszak]] blokk névvel, kezdettel és véggel.
+# A dátum formája ÉÉÉÉ-HH-NN. Töröljön a sorok elejéről a # jelet a példához:
+#
+# [[idoszak]]
+# nev     = "2026 szezon"
+# kezdete = 2026-03-01
+# vege    = 2026-09-30
+#
+# [[idoszak]]
+# nev     = "Rendszerindulás óta"
+# kezdete = 2026-07-01
+# vege    = 2099-12-31

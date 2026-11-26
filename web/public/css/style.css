@@ -372,3 +372,7 @@ kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--bo
 .link-btn.danger { color: var(--critical); }
 .range-info { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .range-dates { font-size: 13px; }
+
+/* compact summary tiles (Ügyintézők tab) */
+.kpis-compact .kpi { padding: 12px 16px; }
+.kpis-compact .kpi .value { font-size: 24px; }

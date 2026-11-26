@@ -70,47 +70,59 @@ let P = null;
 const inCur = (d) => !!d && d >= P.from && d <= P.to;
 const inPrev = (d) => !!d && !!P.prevFrom && d >= P.prevFrom && d <= P.prevTo;
 
+/* Company-wide settings from config/idoszakok.toml (via meta.json) */
+const fiscalStart = () => Math.min(12, Math.max(1, S.meta?.periods?.fiscal_start || 1)) - 1;   // 0 = January
+const sharedPeriods = () => S.meta?.periods?.shared || [];
+
+/* A period key -> {from, to, short}. Year-based periods follow the fiscal year
+   (config/idoszakok.toml); with a January start they are calendar periods. */
 function periodRange(key) {
-  const y = YEAR, m = NOW.getMonth(), q = Math.floor(m / 3), h = m < 6 ? 0 : 1;
+  const F0 = fiscalStart(), m = NOW.getMonth();
   const D = (Y, M, d) => isoDate(new Date(Y, M, d));
-  if (key === "12m") return { from: D(y, m - 11, 1), to: TODAY };
-  if (key === "q") return { from: D(y, q * 3, 1), to: TODAY };
-  if (key === "pq") return { from: D(y, q * 3 - 3, 1), to: D(y, q * 3, 0) };
-  if (key === "h") return { from: D(y, h * 6, 1), to: TODAY };
-  if (key === "ph") return { from: D(y, h * 6 - 6, 1), to: D(y, h * 6, 0) };
-  if (key === "ly") return { from: D(y - 1, 0, 1), to: D(y - 1, 11, 31) };
-  if (key === "2y") return { from: D(y - 1, 0, 1), to: TODAY };
-  if (key === "3y") return { from: D(y - 2, 0, 1), to: TODAY };
-  if (key === "all") return { from: S.firstDate || D(y, 0, 1), to: TODAY };
-  if (key === "ytd") return { from: D(y, 0, 1), to: TODAY };
-  const c = CUSTOM_PERIODS.find((x) => `c:${x.id}` === key);
-  return c ? { from: c.from, to: c.to, name: c.name } : null;
+  const fy = m >= F0 ? YEAR : YEAR - 1;                  // the fiscal year we're in (by its first calendar year)
+  const fyName = (y) => (F0 === 0 ? String(y) : t("per.fy", { y: `${y}/${String(y + 1).slice(2)}` }));
+  const into = (m - F0 + 12) % 12;                         // months since the fiscal year began
+  const fq = Math.floor(into / 3), fh = Math.floor(into / 6);
+  const roman = (n) => (LANG === "hu" ? ["I", "II", "III", "IV"][n - 1] : n);
+  const part = (kind, y, n) => (F0 === 0 ? t(`period.${kind}`, { y, n: roman(n) }) : t(`per.f${kind}`, { y: fyName(y), n: roman(n) }));
+  if (key === "12m") return { from: D(YEAR, m - 11, 1), to: TODAY, short: t("per.short.12m") };
+  if (key === "q") return { from: D(fy, F0 + fq * 3, 1), to: TODAY, short: part("quarter", fy, fq + 1) };
+  if (key === "pq") {
+    const y = fq === 0 ? fy - 1 : fy, n = fq === 0 ? 4 : fq;
+    return { from: D(y, F0 + (n - 1) * 3, 1), to: D(y, F0 + n * 3, 0), short: part("quarter", y, n) };
+  }
+  if (key === "h") return { from: D(fy, F0 + fh * 6, 1), to: TODAY, short: part("half", fy, fh + 1) };
+  if (key === "ph") {
+    const y = fh === 0 ? fy - 1 : fy, n = fh === 0 ? 2 : 1;
+    return { from: D(y, F0 + (n - 1) * 6, 1), to: D(y, F0 + n * 6, 0), short: part("half", y, n) };
+  }
+  if (key === "ly") return { from: D(fy - 1, F0, 1), to: D(fy, F0, 0), short: fyName(fy - 1) };
+  if (key === "2y") return { from: D(fy - 1, F0, 1), to: TODAY, short: `${fyName(fy - 1)} – ${fyName(fy)}` };
+  if (key === "3y") return { from: D(fy - 2, F0, 1), to: TODAY, short: `${fyName(fy - 2)} – ${fyName(fy)}` };
+  if (key === "all") return { from: S.firstDate || D(fy, F0, 1), to: TODAY, short: t("per.short.all") };
+  if (key === "ytd") return { from: D(fy, F0, 1), to: TODAY, short: F0 === 0 ? t("per.short.ytd") : fyName(fy) };
+  const c = key.startsWith("s:") ? sharedPeriods().find((x) => `s:${x.id}` === key)
+    : CUSTOM_PERIODS.find((x) => `c:${x.id}` === key);
+  return c ? { from: c.from, to: c.to, short: c.name, name: c.name } : null;
 }
 function buildPeriod(key) {
   let r = periodRange(key);
   if (!r) { key = "ytd"; r = periodRange(key); }
+  // a period reaching into the future ends today (there is no data after today,
+  // and the comparison would otherwise span the whole future length)
+  if (r.to > TODAY && r.from <= TODAY) r = { ...r, to: TODAY };
   const span = daysBetween(r.from, r.to) + 1;
   const shift = key === "all" ? 0 : Math.max(1, Math.ceil(span / 366));
   return { key, from: r.from, to: r.to, shift,
     prevFrom: shift ? shiftIsoYear(r.from, -shift) : null, prevTo: shift ? shiftIsoYear(r.to, -shift) : null,
-    short: periodShort(key, r), name: r.name };
-}
-/* Short name, used in headings: "idei év", "2026. IV. negyedév", "2025", custom name… */
-function periodShort(key, r) {
-  if (r.name) return r.name;
-  const y = +r.from.slice(0, 4), q = Math.floor((+r.from.slice(5, 7) - 1) / 3) + 1, h = +r.from.slice(5, 7) <= 6 ? 1 : 2;
-  const roman = (n) => (LANG === "hu" ? ["I", "II", "III", "IV"][n - 1] : n);
-  if (key === "q" || key === "pq") return t("period.quarter", { y, n: roman(q) });
-  if (key === "h" || key === "ph") return t("period.half", { y, n: roman(h) });
-  if (key === "ly") return String(y);
-  if (key === "2y" || key === "3y") return `${y}–${YEAR}`;
-  return t("per.short." + key);
+    short: r.short, name: r.name };
 }
 function periodOptionLabel(key) {
   const r = periodRange(key);
   if (!r) return key;
   if (r.name) return `${r.name} (${F.date(r.from)} – ${F.date(r.to)})`;
-  return t("per." + key, { s: periodShort(key, r) });
+  if (fiscalStart() && (key === "ytd" || key === "ly")) return t(`per.f${key}`, { s: r.short });
+  return t("per." + key, { s: r.short });
 }
 const periodKeySaved = () => { try { return localStorage.getItem("period") || "ytd"; } catch { return "ytd"; } };
 
@@ -1034,26 +1046,17 @@ function renderManagers(main) {
   const tile = (label, value, sub, hl = false) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const big = (v) => { const x = F.compactParts(v, "HUF"); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
   const totalYtd = managers.reduce((s, m) => s + hufOf(m.ytd), 0), totalPrev = managers.reduce((s, m) => s + hufOf(m.prev), 0);
-  const bars = (list, value, fmt, tip) => hbars(list.filter((m) => value(m)).sort((a, b) => value(b) - value(a)).map((m) => ({ label: pmLink(m.key), value: value(m), tip: tip(m) })), fmt);
+  // A few summary figures above the table (the table is the main content)
   main.insertAdjacentHTML("afterbegin", `
-    <section class="kpis">
-      ${tile(t("mgr.kpi.count"), esc(F.num(named.length)), esc(t("mgr.kpi.countSub", { n: F.num(S.customers.length) })), !S.hasInvoices)}
+    <section class="kpis kpis-compact">
+      ${tile(t("mgr.kpi.count"), esc(F.num(named.length)), esc(t("mgr.kpi.countSub", { n: F.num(S.customers.length) })))}
       ${S.hasInvoices ? tile(t("kpi.salesYtd", { p: P.short }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
-      ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
-      ${tile(t("mgr.kpi.avg"), esc(F.num(named.length ? Math.round(named.reduce((s, m) => s + m.count, 0) / named.length) : 0)), esc(t("mgr.kpi.avgSub")))}
       ${S.hasOffers ? tile(t("off.kpi", { p: P.short }), esc(F.num(managers.reduce((s, m) => s + m.offersYtd, 0))), esc(t("off.kpiSub", { n: F.num(managers.reduce((s, m) => s + m.offersPrev, 0)) }))) : ""}
-    </section>
-    <div class="${S.hasOffers ? "grid-3" : "grid-2"}">
-      ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { p: P.short }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
-        ${bars(managers, (m) => hufOf(m.ytd), (v) => compactMoney(v, "HUF"), (m) => `${pmName(m.key)}\n${F.money(hufOf(m.ytd), "HUF")}`)}</section>` : ""}
-      <section class="card"><div class="card-head"><h2>${esc(t("chart.byManager"))}</h2></div>
-        ${bars(managers, (m) => m.count, (v) => F.num(v), (m) => `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}`)}</section>
-      ${S.hasOffers ? `<section class="card"><div class="card-head"><h2>${esc(t("off.byManager", { p: P.short }))}</h2></div>
-        ${bars(managers, (m) => m.offersYtd, (v) => t("off.pcs", { n: F.num(v) }), (m) => `${pmName(m.key)}\n${t("off.count", { n: F.num(m.offersYtd) })}\n${t("off.customersN", { n: F.num(m.offerCustomers.size) })}`)}</section>` : ""}
-    </div>`);
+      ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
+    </section>`);
 }
 
-/* Offers of an Ügyintéző this year: how many, and to whom. The amount is shown
+/* Offers of an Ügyintéző in the viewed period: how many, and to whom. The amount is shown
    quietly; offers never count as sales. */
 function offersCard(m) {
   const list = m.offers.filter((o) => inCur(o.date));
@@ -1835,6 +1838,18 @@ function renderSettings(main) {
   const row = (label, control, hint = "") => `<div class="set-row"><div><div class="set-label">${esc(label)}</div>${hint ? `<div class="muted set-hint">${esc(hint)}</div>` : ""}</div><div>${control}</div></div>`;
   main.innerHTML = `
     <section class="card help-intro"><h1>${esc(t("set.title"))}</h1><p>${esc(t("set.intro"))}</p></section>
+    <section class="card">
+      <div class="card-head"><h2>${esc(t("set.shared"))}</h2><span class="sub mono">config/idoszakok.toml</span></div>
+      <div class="set-row"><div><div class="set-label">${esc(t("set.fiscal"))}</div><div class="muted set-hint">${esc(t("set.fiscalHint"))}</div></div>
+        <div><b>${esc(new Intl.DateTimeFormat(F.loc, { month: "long" }).format(new Date(2026, fiscalStart(), 1)))}</b></div></div>
+      <div class="table-wrap plain"><table>
+        <thead><tr><th>${esc(t("set.name"))}</th><th>${esc(t("set.from"))}</th><th>${esc(t("set.to"))}</th><th></th></tr></thead>
+        <tbody>${sharedPeriods().map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(F.date(c.from))}</td><td>${esc(F.date(c.to))}</td>
+          <td class="num"><button type="button" class="link-btn" data-use-shared="${esc(c.id)}">${esc(t("set.use"))}</button></td></tr>`).join("")
+          || `<tr class="empty-row"><td colspan="4">${esc(t("set.noShared"))}</td></tr>`}</tbody>
+      </table></div>
+      <div class="card-foot">${esc(t("set.sharedHint"))}</div>
+    </section>
     <div class="grid-2">
       <section class="card">
         <div class="card-head"><h2>${esc(t("set.periods"))}</h2><span class="sub">${esc(t("set.periodsSub"))}</span></div>
@@ -1886,8 +1901,9 @@ function renderSettings(main) {
     applyPeriod(`c:${id}`); // use it right away
   });
   main.addEventListener("click", (e) => {
-    const use = e.target.closest("[data-use]"), del = e.target.closest("[data-del]");
+    const use = e.target.closest("[data-use]"), del = e.target.closest("[data-del]"), useShared = e.target.closest("[data-use-shared]");
     if (use) { applyPeriod(`c:${use.dataset.use}`); return; }
+    if (useShared) { applyPeriod(`s:${useShared.dataset.useShared}`); return; }
     if (del) {
       CUSTOM_PERIODS = CUSTOM_PERIODS.filter((c) => c.id !== del.dataset.del);
       saveJson("customPeriods", CUSTOM_PERIODS);
@@ -2036,6 +2052,7 @@ function renderPeriodSelect() {
   const sel = $("#period");
   const opt = (k) => `<option value="${esc(k)}"${k === P.key ? " selected" : ""}>${esc(periodOptionLabel(k))}</option>`;
   sel.innerHTML = PERIOD_KEYS.map(opt).join("") +
+    (sharedPeriods().length ? `<optgroup label="${esc(t("per.shared"))}">${sharedPeriods().map((c) => opt(`s:${c.id}`)).join("")}</optgroup>` : "") +
     (CUSTOM_PERIODS.length ? `<optgroup label="${esc(t("per.custom"))}">${CUSTOM_PERIODS.map((c) => opt(`c:${c.id}`)).join("")}</optgroup>` : "") +
     `<option value="__manage">${esc(t("per.manage"))}</option>`;
   sel.closest("label").title = `${t("per.title")}: ${F.date(P.from)} – ${F.date(P.to)}` +
