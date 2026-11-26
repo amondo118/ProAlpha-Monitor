@@ -108,28 +108,57 @@ def build(files, cfg):
     if "szamlak" in found:
         rows, w = datasets.parse(found["szamlak"], "szamlak", cfg)
         warnings += w
-        invoices, seen, of_blocked, orphans = [], set(), 0, {}
+        name = found["szamlak"].name
+        section = cfg["columns"]["szamlak"]
+        # Invoice types counted as negative (credit notes), compared without case/accents
+        negative = {datasets.fold(k) for k in section.get("negativ_tipusok", ["Jóváírás"])}
+        invoices, by_key, of_blocked, orphans, merged = [], {}, 0, {}, 0
+        kinds, cancelled = {}, 0
         customer_ids = {c["id"] for c in customers}
         for r in rows:
             line = r.pop("_line")
             if not r.get("id") or not r.get("customer_id"):
-                warnings.append(f"{found['szamlak'].name} line {line}: no invoice or customer number, row skipped")
+                warnings.append(f"{name} line {line}: no invoice or customer number, row skipped")
                 continue
+            # One invoice can appear on several identical rows (a side effect of the
+            # export). The internal document ID identifies it; without it, the number.
+            key = r.get("doc_id") or r["id"]
+            if key in by_key:
+                if by_key[key] == r:
+                    merged += 1
+                else:
+                    warnings.append(f"{name} line {line}: invoice {r['id']} appears again with different values, row skipped")
+                continue
+            by_key[key] = dict(r)
             if r["customer_id"] in blocked:
                 of_blocked += 1
                 continue
-            if r["id"] in seen:
-                warnings.append(f"{found['szamlak'].name} line {line}: duplicate invoice {r['id']}, row skipped")
-                continue
-            seen.add(r["id"])
+            kind = r.get("kind") or ""
+            kinds[kind] = kinds.get(kind, 0) + 1
+            if datasets.fold(kind) in negative:
+                for f in ("net", "gross", "net_local"):
+                    if r.get(f) is not None:
+                        r[f] = -abs(r[f])
+                r["credit"] = True
+            if (r.get("cancelled") or "").strip().lower() in ("igen", "i", "yes", "x"):
+                cancelled += 1
             if r["customer_id"] not in customer_ids:
                 orphans[r["customer_id"]] = orphans.get(r["customer_id"], 0) + 1
+            # Keep the page's data small: drop what was only needed here
+            for f in ("doc_id", "kind", "cancelled", "origin"):
+                r.pop(f, None)
+            if r.get("currency"):
+                r.pop("currency_code", None)
+            if r.get("tax_date") == r.get("date"):
+                r["tax_date"] = None
             invoices.append(r)
         for cid, n in sorted(orphans.items()):
             warnings.append(f"Invoices for unknown customer {cid}: {n} (not in the customer export)")
         data["invoices"] = invoices
-        sources["invoices"] = {"file": found["szamlak"].name, "exported_at": stamp(found["szamlak"]),
-                               "rows": len(invoices), "skipped_blocked": of_blocked}
+        sources["invoices"] = {"file": name, "exported_at": stamp(found["szamlak"]), "rows": len(invoices),
+                               "skipped_blocked": of_blocked, "duplicates_merged": merged,
+                               "kinds": kinds, "cancelled_flagged": cancelled,
+                               "has_payments": "cleared" in section.get("oszlopok", {})}
     return data, sources, warnings
 
 
@@ -142,7 +171,9 @@ def compact(data):
         if key == "customers" or not rows:
             out[key] = rows
             continue
-        fields = [f for f in rows[0] if any(r.get(f) is not None for r in rows)]
+        # every field that appears in any row (not just the first), unless always empty
+        fields = list(dict.fromkeys(f for r in rows for f in r))
+        fields = [f for f in fields if any(r.get(f) is not None for r in rows)]
         out[key] = {"fields": fields, "rows": [[r.get(f) for f in fields] for r in rows]}
     return out
 

@@ -32,9 +32,16 @@ FIELDS = {
         "street": "text", "house_number": "text", "city": "text", "postal_code": "text",
     },
     "szamlak": {
-        "id": "text", "customer_id": "text", "date": "date", "due": "date",
-        "net": "amount", "gross": "amount", "currency": "currency", "cleared": "date",
-        "net_local": "amount",  # optional: net in HUF, for totals across currencies
+        "doc_id": "text",        # internal document ID: merges duplicate rows of one invoice
+        "id": "text",            # invoice number (shown)
+        "customer_id": "text", "date": "date", "tax_date": "date", "due": "date",
+        "net": "amount", "gross": "amount", "currency": "currency",
+        "kind": "text",          # invoice type (SzlT): "Számla", "Jóváírás", …
+        "cancelled": "text",     # storno flag (Sto)
+        "origin": "text",        # created from: order / delivery note (BF)
+        "clerk": "text",         # who issued it (user name)
+        "cleared": "date",       # payment date; without it there is no open-invoice view
+        "net_local": "amount",   # optional: net in HUF, for totals across currencies
     },
 }
 # The data.json key for each export

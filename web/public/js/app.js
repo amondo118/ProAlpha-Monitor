@@ -107,6 +107,8 @@ const moneyList = (map) => [...map.entries()].filter(([, c]) => c).sort()
 const S = {
   meta: null, customers: [], byId: new Map(), managers: new Map(), groups: new Map(),
   hasInvoices: false, invoiceCount: 0,
+  hasPayments: false,   // only with a payment (cleared) column: open-invoice views
+  invoices: [],         // every invoice, with .c = its customer (for the sales view)
 };
 
 async function fetchJson(url) {
@@ -164,14 +166,21 @@ function index(data) {
   const invoices = expand(data.invoices);
   S.hasInvoices = !!invoices;
   S.invoiceCount = invoices?.length || 0;
+  // Without a payment column every invoice would look open: open-invoice views are hidden then
+  S.hasPayments = !!S.meta.sources?.invoices?.has_payments;
+  S.invoices = [];
   for (const inv of invoices || []) {
     const c = S.byId.get(inv.customer_id);
     if (!c) continue; // reported by the importer
     const cur = inv.currency || inv.currency_code || c.currency || "";
     const due = inv.due || (inv.date && c.payment_terms != null ? addDays(inv.date, c.payment_terms) : null);
-    c.invoices.push({ ...inv, cur, dueEff: due, dueEstimated: !inv.due && !!due, open: !inv.cleared,
-      daysOverdue: !inv.cleared && due ? daysBetween(due, TODAY) : null });
+    const open = S.hasPayments && !inv.cleared;
+    const x = { ...inv, c, cur, dueEff: due, dueEstimated: !inv.due && !!due, open,
+      daysOverdue: open && due ? daysBetween(due, TODAY) : null };
+    c.invoices.push(x);
+    S.invoices.push(x);
   }
+  for (const c of S.customers) c.invoices.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id, undefined, { numeric: true }));
   for (const c of S.customers) c.st = customerStats(c);
 
   S.managers = new Map();
@@ -194,12 +203,15 @@ function index(data) {
 /* Per-customer invoice figures, per currency in cents. */
 function customerStats(c) {
   const st = { ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), byYear: new Map(),
-    openN: 0, overdueN: 0, firstYear: null, lastYear: null };
+    openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, count: 0, firstDate: null };
   const counts = new Map();
   for (const i of c.invoices) {
     const v = cents(i.net);
     counts.set(i.cur, (counts.get(i.cur) || 0) + 1);
     addTo(st.total, i.cur, v);
+    st.count++;
+    if (i.date && (!st.firstDate || i.date < st.firstDate)) st.firstDate = i.date;
+    if (i.date >= PERIOD.ytd) { if (i.credit) st.ytdCredits++; else st.ytdCount++; }
     if (i.date) {
       const y = +i.date.slice(0, 4);
       if (!st.byYear.has(y)) st.byYear.set(y, new Map());
@@ -224,8 +236,8 @@ function customerStats(c) {
 
 /* ---------- routing & URL state ---------- */
 
-const VIEWS = ["overview", "managers", "customers", "customer", "status"];
-const TABS = ["overview", "managers", "customers"];
+const VIEWS = ["overview", "sales", "managers", "customers", "customer", "status"];
+const TABS = ["overview", "sales", "managers", "customers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
 const tablePage = {};
@@ -251,7 +263,7 @@ function route() {
   const main = $("#view");
   main.innerHTML = "";
   viewUpdate = null;
-  ({ overview: renderOverview, managers: renderManagers, customers: renderCustomers, customer: renderCustomer, status: renderStatus })[current.view](main);
+  ({ overview: renderOverview, sales: renderSales, managers: renderManagers, customers: renderCustomers, customer: renderCustomer, status: renderStatus })[current.view](main);
   const open = current.params.get("open");
   if (open) openDetail(open, false);
   else if ($("#detail").open) $("#detail").close();
@@ -368,14 +380,14 @@ const fDate = (param, labelKey) =>
   `<label class="date-label">${esc(t(labelKey))} <input type="date" data-param="${param}" value="${esc(current.params.get(param) || "")}"></label>`;
 
 /* A filter card + results area. `draw(host)` renders the results. */
-function filteredView(main, filtersHtml, draw, exportFn) {
+function filteredView(main, filtersHtml, draw, exportFn, { outside = false } = {}) {
   main.innerHTML = `<section class="card"><div class="filters">${filtersHtml}
       <span class="spacer"></span>
       <button type="button" class="secondary" data-act="reset">${esc(t("f.reset"))}</button>
       <button type="button" data-act="export">${esc(t("f.export"))}</button>
-    </div><div class="results"></div></section>`;
+    </div>${outside ? "" : '<div class="results"></div>'}</section>${outside ? '<div class="results" style="display:contents"></div>' : ""}`;
   const card = main.firstElementChild;
-  const host = $(".results", card);
+  const host = $(".results", main);
   viewUpdate = () => draw(host);
   let timer;
   card.addEventListener("input", (e) => {
@@ -383,6 +395,12 @@ function filteredView(main, filtersHtml, draw, exportFn) {
     if (!el.dataset.param) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
+      // e.g. choosing a range preset clears the custom from/to dates
+      for (const other of (el.dataset.clears || "").split(",").filter(Boolean)) {
+        setParams({ [other]: "" });
+        const input = card.querySelector(`[data-param="${other}"]`);
+        if (input) input.value = "";
+      }
       setParams({ [el.dataset.param]: el.value.trim() });
       tablePage[current.view] = 0;
       viewUpdate();
@@ -391,9 +409,9 @@ function filteredView(main, filtersHtml, draw, exportFn) {
   card.addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (act === "reset") {
-      card.querySelectorAll("[data-param]").forEach((el) => { el.value = ""; setParams({ [el.dataset.param]: "" }); });
+      card.querySelectorAll("[data-param]").forEach((el) => setParams({ [el.dataset.param]: "" }));
       tablePage[current.view] = 0;
-      viewUpdate();
+      route(); // re-render, so every control shows its default again
     } else if (act === "export") exportFn();
   });
   viewUpdate();
@@ -635,9 +653,25 @@ function renderOverview(main) {
   }));
   const latest = [...all].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created) || b.id.localeCompare(a.id)).slice(0, 10);
 
+  // Sales this year (HUF part; other currencies are on the Sales tab)
+  let salesTile = "";
+  if (S.hasInvoices) {
+    let ytd = 0, prev = 0;
+    for (const i of S.invoices) {
+      if (i.cur !== "HUF" || !i.date) continue;
+      if (i.date >= PERIOD.ytd) ytd += cents(i.net);
+      else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) prev += cents(i.net);
+    }
+    const d = prev ? (ytd - prev) / Math.abs(prev) : null;
+    const p = F.compactParts(ytd / 100, "HUF");
+    salesTile = `<a class="kpi hl" href="#sales?r=ytd"><div class="label">${esc(t("kpi.salesYtd", { year: YEAR }))}</div>
+      <div class="value">${esc(p.num)}<span class="unit">${esc(p.unit)}</span></div>
+      <div class="sub">${d == null ? "" : `<span class="${d >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(d) }))}</span>`}</div></a>`;
+  }
   main.innerHTML = `
     <section class="kpis">
-      ${tile("#customers", t("kpi.customers"), F.num(all.length), t("kpi.customersSub", { n: pmCount }), true)}
+      ${salesTile}
+      ${tile("#customers", t("kpi.customers"), F.num(all.length), t("kpi.customersSub", { n: pmCount }), !S.hasInvoices)}
       ${tile(`#customers?from=${PERIOD.new}`, t("kpi.new30"), F.num(new30), t("kpi.vsPrev30", { n: F.num(prev30) }))}
       ${tile(`#customers?from=${PERIOD.ytd}`, t("kpi.newYtd"), F.num(newYtd), t("kpi.vsPrevYtd", { n: F.num(prevYtd) }))}
       ${tile(`#customers?pm=${NONE}`, t("kpi.noManager"), F.num(noPm), t("kpi.noManagerSub"))}
@@ -726,9 +760,8 @@ function managerColumns() {
   ];
   if (S.hasInvoices) {
     // Sorted by the HUF part; the full per-currency list is shown
-    cols.push(
-      { key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (m) => (m.ytd.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.ytd)), csv: (m) => moneyList(m.ytd) },
-      { key: "open", label: t("col.openNet"), num: true, value: (m) => (m.open.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
+    cols.push({ key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (m) => (m.ytd.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.ytd)), csv: (m) => moneyList(m.ytd) });
+    if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (m) => (m.open.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
   }
   return cols;
 }
@@ -762,10 +795,9 @@ function customerColumns() {
   ];
   if (S.hasInvoices) {
     const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
-    cols.push(
-      { key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)), csv: (c) => moneyList(c.st.ytd) },
-      { key: "open", label: t("col.openNet"), num: true, value: (c) => c.st.main(c.st.open) || null,
-        html: (c) => (c.st.openN ? `${c.st.overdueN ? `<span class="pill bad">${c.st.overdueN}</span> ` : ""}${esc(money(c, c.st.open))}` : ""), csv: (c) => moneyList(c.st.open) });
+    cols.push({ key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)), csv: (c) => moneyList(c.st.ytd) });
+    if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (c) => c.st.main(c.st.open) || null,
+      html: (c) => (c.st.openN ? `${c.st.overdueN ? `<span class="pill bad">${c.st.overdueN}</span> ` : ""}${esc(money(c, c.st.open))}` : ""), csv: (c) => moneyList(c.st.open) });
   }
   return cols;
 }
@@ -841,14 +873,17 @@ function renderCustomer(main) {
     kpis = [
       kpiTile(t("cust.revenueYtd", { year: YEAR }), bigMoney(ytd, st.cur),
         (delta == null ? esc(t("cust.noPrev")) : `<span class="${delta >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(delta) }))}</span>`) + others(st.ytd), true),
-      kpiTile(t("cust.openInvoices"), bigMoney(st.main(st.open), st.cur),
-        esc(st.overdueN ? t("cust.overdueCount", { n: st.openN, o: st.overdueN }) : t("cust.openCount", { n: st.openN })) + others(st.open)),
+      S.hasPayments
+        ? kpiTile(t("cust.openInvoices"), bigMoney(st.main(st.open), st.cur),
+          esc(st.overdueN ? t("cust.overdueCount", { n: st.openN, o: st.overdueN }) : t("cust.openCount", { n: st.openN })) + others(st.open))
+        : kpiTile(t("cust.invoicesYtd", { year: YEAR }), esc(F.num(st.ytdCount)),
+          esc([st.ytdCredits ? t("cust.creditCount", { n: st.ytdCredits }) : "", t("cust.invoiceCountAll", { n: F.num(st.count) })].filter(Boolean).join(" · "))),
       termsTile,
       kpiTile(t("cust.revenueTotal"), bigMoney(st.main(st.total), st.cur), esc(yearsSpan) + others(st.total)),
     ];
   } else {
     const empty = (label) => kpiTile(label, `<span class="empty">–</span>`, esc(t("cust.noExport")));
-    kpis = [empty(t("cust.revenueYtd", { year: YEAR })), empty(t("cust.openInvoices")), termsTile, empty(t("cust.revenueTotal"))];
+    kpis = [empty(t("cust.revenueYtd", { year: YEAR })), empty(t("cust.invoicesYtd", { year: YEAR })), termsTile, empty(t("cust.revenueTotal"))];
   }
 
   const src = (key) => S.meta.sources?.[key];
@@ -879,14 +914,14 @@ function renderCustomer(main) {
     <div class="cust-grid">
       <div class="stack">
         <section class="card chart">
-          <div class="card-head"><h2>${esc(t("cust.revenueByYear"))}</h2>${srcTag("invoices")}</div>
+          <div class="card-head"><h2>${esc(t("cust.revenueBy"))}</h2>${S.hasInvoices && c.invoices.length ? granSwitch(custGran(), CUST_GRANS) : srcTag("invoices")}</div>
           ${!S.hasInvoices ? `<div class="empty-state">${esc(t("cust.noInvoiceExport"))}</div>`
             : !c.invoices.length ? `<div class="empty-state">${esc(t("cust.noInvoices"))}</div>`
-            : `<div id="years"></div><div class="card-foot">${esc(t("cust.revenueFoot", { cur: st.cur, year: YEAR }))}</div>`}
+            : `<div id="years"></div><div class="card-foot">${esc(t("cust.revenueFoot", { cur: st.cur }))}</div>`}
         </section>
         <section class="card">
-          <div class="card-head"><h2>${esc(t("cust.openTitle"))}</h2>${srcTag("invoices")}</div>
-          ${openInvoicesHtml(c)}
+          <div class="card-head"><h2>${esc(t(S.hasPayments || !S.hasInvoices ? "cust.openTitle" : "cust.latest"))}</h2>${srcTag("invoices")}</div>
+          ${S.hasPayments || !S.hasInvoices ? openInvoicesHtml(c) : latestInvoicesHtml(c)}
         </section>
       </div>
       <div class="stack">
@@ -924,7 +959,44 @@ function renderCustomer(main) {
       ${["customers", "invoices"].map((k) => (src(k) ? `<code title="${esc(F.dateTime(new Date(src(k).exported_at)))}">${esc(src(k).file)}</code>` : "")).join("")}
       ${src("invoices") ? "" : `<code>${esc(t("cust.noFile"))}</code>`}
     </footer>`;
-  if (S.hasInvoices && c.invoices.length) drawYears($("#years"), c);
+  if (S.hasInvoices && c.invoices.length) drawCustomerPeriods($("#years"), c);
+  main.querySelector(".seg")?.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-gran]");
+    if (!b) return;
+    setParams({ g: b.dataset.gran });
+    main.querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    drawCustomerPeriods($("#years"), c);
+  });
+}
+
+/* Latest invoices (when the export has no payment data, open invoices can't be shown). */
+function latestInvoicesHtml(c) {
+  if (!c.invoices.length) return `<div class="empty-state">${esc(t("cust.noInvoices"))}</div>`;
+  const shown = c.invoices.slice(0, 15);
+  return `<div class="table-wrap plain"><table>
+    <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(t("col.net"))}</th><th></th></tr></thead>
+    <tbody>${shown.map((i) => `<tr><td class="mono">${esc(i.id)}</td><td>${esc(F.date(i.date))}</td>
+      <td class="num">${esc(F.money(i.net, i.cur))}</td><td>${i.credit ? `<span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}</td></tr>`).join("")}</tbody>
+  </table></div>
+  <div class="card-foot"><a href="#sales?r=all&g=month&q=${encodeURIComponent(c.id)}">${esc(t("cust.allSales", { n: F.num(c.invoices.length) }))}</a></div>`;
+}
+
+/* Customer sales chart: the last few periods, the current one highlighted. */
+const CUST_GRANS = ["year", "half", "quarter", "month"];
+const CUST_PERIODS = { year: 5, half: 8, quarter: 12, month: 24 };
+const custGran = () => (CUST_GRANS.includes(current.params.get("g")) ? current.params.get("g") : "year");
+function granSwitch(active, grans) {
+  return `<div class="seg" role="group" aria-label="${esc(t("sales.gran"))}">${grans.map((g) =>
+    `<button type="button" data-gran="${g}" aria-pressed="${g === active}">${esc(t("gran." + g))}</button>`).join("")}</div>`;
+}
+function drawCustomerPeriods(host, c) {
+  const g = custGran(), st = c.st;
+  let keys = periodKeys(st.firstDate || TODAY, TODAY, g);
+  keys = keys.slice(-CUST_PERIODS[g]);
+  const sums = new Map();
+  for (const i of c.invoices) if (i.cur === st.cur && i.date) addTo(sums, periodKey(i.date, g), cents(i.net));
+  drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur: st.cur, mode: "highlight",
+    label: t("cust.revenueBy") });
 }
 
 function openInvoicesHtml(c) {
@@ -948,35 +1020,280 @@ function openInvoicesHtml(c) {
   <div class="card-foot">${esc(estimated ? t("cust.openFoot") : t("cust.openFoot").split(" * ")[0])}</div>`;
 }
 
-/* Yearly sales: past years muted, current year in the accent colour, value on top of each bar. */
-function drawYears(host, c) {
-  const st = c.st;
-  const first = Math.max(st.firstYear ?? YEAR, YEAR - CONFIG.chartYears + 1);
-  const years = [];
-  for (let y = first; y <= YEAR; y++) years.push(y);
-  const vals = years.map((y) => (st.byYear.get(y)?.get(st.cur) || 0) / 100);
-  const W = Math.max(300, host.clientWidth), H = 260;
-  const m = { l: 52, r: 8, t: 24, b: 28 };
-  const pw = W - m.l - m.r, ph = H - m.t - m.b, base = m.t + ph;
-  const rawMax = Math.max(...vals.map((v) => Math.max(0, v)), 1);
-  const step = niceStep(rawMax / 4);
-  const max = Math.ceil(rawMax / step) * step;
-  const y = (v) => m.t + ph - (Math.max(0, v) / max) * ph;
-  const bw = pw / years.length, barW = Math.min(64, bw * 0.5);
+/* ---------- periods ---------- */
+/* Period keys: day 2026-06-08 · week 2026-W23 (ISO) · month 2026-06 · quarter 2026-Q2
+   · half 2026-H1 · year 2026. A key with the year lowered by one is the same
+   period of the previous year (also for ISO weeks). */
+const GRANS = ["day", "week", "month", "quarter", "half", "year"];
+function isoWeek(iso) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7)); // Thursday of this week decides the year
+  const y = d.getFullYear(), jan4 = new Date(y, 0, 4);
+  return [y, 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getDay() + 6) % 7)) / 7)];
+}
+function periodKey(iso, g) {
+  const y = iso.slice(0, 4), m = +iso.slice(5, 7);
+  if (g === "day") return iso.slice(0, 10);
+  if (g === "week") { const [wy, w] = isoWeek(iso); return `${wy}-W${pad(w)}`; }
+  if (g === "month") return iso.slice(0, 7);
+  if (g === "quarter") return `${y}-Q${Math.ceil(m / 3)}`;
+  if (g === "half") return `${y}-H${m <= 6 ? 1 : 2}`;
+  return y;
+}
+function periodStart(key, g) {
+  const y = +key.slice(0, 4), n = +key.slice(6);
+  if (g === "day") return key;
+  if (g === "week") { const jan4 = new Date(y, 0, 4); return isoDate(new Date(y, 0, 4 - ((jan4.getDay() + 6) % 7) + (n - 1) * 7)); }
+  if (g === "month") return `${key}-01`;
+  if (g === "quarter") return `${y}-${pad((n - 1) * 3 + 1)}-01`;
+  if (g === "half") return `${y}-${n === 1 ? "01" : "07"}-01`;
+  return `${y}-01-01`;
+}
+function nextPeriodStart(key, g) {
+  const d = new Date(periodStart(key, g) + "T00:00:00");
+  if (g === "day") d.setDate(d.getDate() + 1);
+  else if (g === "week") d.setDate(d.getDate() + 7);
+  else d.setMonth(d.getMonth() + ({ month: 1, quarter: 3, half: 6, year: 12 })[g]);
+  return isoDate(d);
+}
+function periodKeys(from, to, g) {
+  const keys = [];
+  for (let k = periodKey(from, g); periodStart(k, g) <= to && keys.length < 4000; k = periodKey(nextPeriodStart(k, g), g)) keys.push(k);
+  return keys;
+}
+const shiftKeyYear = (key, n) => `${+key.slice(0, 4) + n}${key.slice(4)}`;
+const shiftIsoYear = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setFullYear(d.getFullYear() + n); return isoDate(d); };
+const ROMAN = ["I", "II", "III", "IV"];
+function periodLabel(key, g, short = false) {
+  const y = key.slice(0, 4), n = +key.slice(6);
+  const roman = LANG === "hu" ? ROMAN[n - 1] : n;
+  if (g === "day") return short ? new Date(key + "T00:00:00").toLocaleDateString(F.loc, { month: "short", day: "numeric" }) : F.date(key);
+  if (g === "week") return t(short ? "period.weekShort" : "period.week", { y, n });
+  if (g === "month") return short ? F.month(key) : F.monthYear(key);
+  if (g === "quarter") return t(short ? "period.quarterShort" : "period.quarter", { y, n: roman });
+  if (g === "half") return t(short ? "period.halfShort" : "period.half", { y, n: roman });
+  return y;
+}
+
+/* Bar chart over periods.
+   mode "highlight": one series, the last (current) period in the accent colour;
+   mode "compare":   previous year (muted) next to this period (accent). */
+function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "" }) {
+  const n = keys.length;
+  const W = Math.max(300, host.clientWidth), H = 270;
+  const m = { l: 56, r: 8, t: 24, b: 30 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const all = [...values, ...(prev || [])];
+  const hi = Math.max(...all, 0), lo = Math.min(...all, 0);
+  const step = niceStep(Math.max(hi - lo, 1) / 4);
+  const max = Math.ceil(hi / step) * step || step, min = Math.floor(lo / step) * step;
+  const y = (v) => m.t + ((max - v) / (max - min)) * ph;
+  const base = y(0), bw = pw / Math.max(n, 1);
+  const pair = mode === "compare";
+  const barW = Math.max(1, pair ? Math.min(28, bw * 0.38) : Math.min(64, bw * 0.6));
+  const bar = (x, v, cls) => (v >= 0 ? barPath(x, barW, y(v), base, cls)
+    : `<rect class="${cls}" x="${x}" y="${base}" width="${barW}" height="${y(v) - base}"/>`);
   let svg = "";
-  for (let v = step; v <= max; v += step) {
-    svg += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/>`;
-    svg += `<text class="axis-label" x="${m.l - 10}" y="${y(v) + 4}" text-anchor="end">${esc(F.axis(v))}</text>`;
+  for (let v = min; v <= max + step / 2; v += step) {
+    if (v !== 0) svg += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/>`;
+    svg += `<text class="axis-label" x="${m.l - 10}" y="${y(v) + 4}" text-anchor="end">${esc(v ? F.axis(v) : "0")}</text>`;
   }
-  svg += `<line class="baseline" x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}"/><text class="axis-label" x="${m.l - 10}" y="${base + 4}" text-anchor="end">0</text>`;
-  years.forEach((yr, k) => {
-    const cx = m.l + bw * k + bw / 2, now = yr === YEAR ? " now" : "";
-    svg += barPath(cx - barW / 2, barW, y(vals[k]), base, `bar${now}`);
-    if (vals[k]) svg += `<text class="value-label${now}" x="${cx}" y="${y(vals[k]) - 8}" text-anchor="middle">${esc(F.axis(vals[k]))}</text>`;
-    svg += `<text class="year-label${now}" x="${cx}" y="${H - 6}" text-anchor="middle">${yr}</text>`;
-    svg += `<rect class="band" x="${m.l + bw * k}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(`${yr}\n${F.money(vals[k], st.cur)}`)}"/>`;
+  svg += `<line class="baseline" x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}"/>`;
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 64))));
+  const showValues = !pair && n <= 12;
+  keys.forEach((k, i) => {
+    const cx = m.l + bw * i + bw / 2;
+    const now = mode === "highlight" && i === n - 1 ? " now" : "";
+    if (pair) {
+      if (prev) svg += bar(cx - barW - 1, prev[i], "bar");
+      svg += bar(prev ? cx + 1 : cx - barW / 2, values[i], "bar now");
+    } else svg += bar(cx - barW / 2, values[i], mode === "plain" ? "bar now" : `bar${now}`);
+    if (showValues && values[i]) svg += `<text class="value-label${now}" x="${cx}" y="${values[i] >= 0 ? y(values[i]) - 8 : y(values[i]) + 14}" text-anchor="middle">${esc(F.axis(values[i]))}</text>`;
+    if (i % every === 0) {
+      const newYear = g !== "year" && (i === 0 || keys[i - 1].slice(0, 4) !== k.slice(0, 4));
+      const text = g === "year" ? k : `${newYear ? k.slice(0, 4) + " " : ""}${periodLabel(k, g, true)}`;
+      svg += `<text class="${g === "year" ? `year-label${now}` : "axis-label"}" x="${cx}" y="${H - 8}" text-anchor="middle">${esc(text)}</text>`;
+    }
+    const tipLines = [periodLabel(k, g), F.money(values[i], cur)];
+    if (prev) {
+      tipLines.push(`${t("sales.prevYear")} (${periodLabel(shiftKeyYear(k, -1), g)}): ${F.money(prev[i], cur)}`);
+      if (prev[i]) tipLines.push(`${t("sales.col.change")}: ${F.signedPct((values[i] - prev[i]) / Math.abs(prev[i]))}`);
+    }
+    svg += `<rect class="band" x="${m.l + bw * i}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(tipLines.join("\n"))}"/>`;
   });
-  host.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t("cust.revenueByYear"))}">${svg}</svg>`;
+  host.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">${svg}</svg>`;
+}
+
+/* ---------- sales view ---------- */
+
+const RANGES = ["12m", "ytd", "ly", "3y", "all"];
+const DEFAULT_GRAN = { "12m": "month", ytd: "month", ly: "month", "3y": "quarter", all: "year", custom: "month" };
+const BREAKDOWNS = ["customer", "manager", "region", "industry", "country", "clerk"];
+
+function salesRange(p) {
+  const first = S.invoices.reduce((a, i) => (i.date && (!a || i.date < a) ? i.date : a), null) || TODAY;
+  if (p.get("from") || p.get("to")) return { from: p.get("from") || first, to: p.get("to") || TODAY, preset: "custom" };
+  const r = RANGES.includes(p.get("r")) ? p.get("r") : "12m";
+  if (r === "ytd") return { from: PERIOD.ytd, to: TODAY, preset: r };
+  if (r === "ly") return { from: `${YEAR - 1}-01-01`, to: `${YEAR - 1}-12-31`, preset: r };
+  if (r === "3y") return { from: `${YEAR - 2}-01-01`, to: TODAY, preset: r };
+  if (r === "all") return { from: first, to: TODAY, preset: r };
+  return { from: isoDate(new Date(YEAR, NOW.getMonth() - 11, 1)), to: TODAY, preset: "12m" };
+}
+
+function breakdownKey(by, i) {
+  const c = i.c;
+  if (by === "manager") return [pmKey(c), pmName(pmKey(c)), pmKey(c) === NONE ? null : `#customers?pm=${encodeURIComponent(pmKey(c))}`];
+  if (by === "region") return [c.regionLabel || "", c.regionLabel || t("none"), null];
+  if (by === "industry") return [c.industryLabel || "", c.industryLabel || t("none"), null];
+  if (by === "country") return [c.country || "", c.country ? `${F.country(c.country)} (${c.country})` : t("none"), null];
+  if (by === "clerk") return [i.clerk || "", i.clerk || t("none"), null];
+  return [c.id, c.name || c.id, customerHref(c.id)];
+}
+
+function renderSales(main) {
+  if (!S.hasInvoices) {
+    main.innerHTML = `<section class="card"><div class="empty-state">${esc(t("sales.noInvoices"))}</div></section>`;
+    return;
+  }
+  const p = current.params;
+  // currencies by total, the largest first; HUF preferred
+  const curTotals = new Map();
+  for (const i of S.invoices) addTo(curTotals, i.cur, Math.abs(cents(i.net)));
+  const currencies = [...curTotals.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  const pms = [...S.managers.keys()].filter((k) => k !== NONE).sort((a, b) => a.localeCompare(b, F.loc));
+  const sortedSet = (key) => [...new Set(S.customers.map((c) => c[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, F.loc));
+  const countries = [...new Set(S.customers.map((c) => c.country).filter(Boolean))].sort();
+  const plain = (param, options, value) => `<select data-param="${param}"${param === "r" ? ' data-clears="from,to"' : ""}>${options.map(([v, l]) =>
+    `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const range0 = salesRange(p);
+  let state = {};
+
+  filteredView(main, [
+    plain("r", [...RANGES.map((r) => [r, t("range." + r)]), ...(range0.preset === "custom" ? [["custom", t("range.custom")]] : [])], range0.preset),
+    fDate("from", "f.fromDate"), fDate("to", "f.toDate"),
+    plain("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || DEFAULT_GRAN[range0.preset]),
+    plain("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || "net"),
+    plain("cur", currencies.map((c) => [c, c]), currencies.includes(p.get("cur")) ? p.get("cur") : (currencies.includes("HUF") ? "HUF" : currencies[0])),
+    plain("by", BREAKDOWNS.map((b) => [b, t("by." + b)]), p.get("by") || "customer"),
+    fSearch("q", "f.searchCustomers"),
+    fSelect("pm", "f.allManagers", [...pms.map((k) => [k, k]), ...(S.managers.has(NONE) ? [[NONE, t("none")]] : [])]),
+    fSelect("region", "f.allRegions", sortedSet("regionLabel").map((r) => [r, r])),
+    fSelect("industry", "f.allIndustries", sortedSet("industryLabel").map((i) => [i, i])),
+    fSelect("country", "f.allCountries", countries.map((c) => [c, `${c} – ${F.country(c)}`])),
+  ].join(""), (host) => {
+    state = drawSales(host, currencies);
+    // keep the dropdowns in step: custom dates -> "Egyedi időszak"; a preset sets its default breakdown
+    const sync = (param, value, label) => {
+      const sel = main.querySelector(`select[data-param="${param}"]`);
+      if (!sel) return;
+      if (![...sel.options].some((o) => o.value === value)) sel.add(new Option(label, value));
+      sel.value = value;
+    };
+    sync("r", state.preset, t("range.custom"));
+    sync("g", state.g);
+  }, () => {
+    exportCsv(`ertekesites_${state.g}`, [
+      { label: t("sales.col.period"), value: (r) => periodLabel(r.key, state.g) },
+      { label: t("sales.col.from"), value: (r) => periodStart(r.key, state.g) },
+      { label: `${t("sales.col.amount")} (${state.cur})`, value: (r) => r.v / 100 },
+      { label: `${t("sales.prevYear")} (${state.cur})`, value: (r) => r.prev / 100 },
+      { label: t("sales.col.count"), value: (r) => r.n },
+      { label: t("sales.col.credits"), value: (r) => r.credits },
+    ], state.periods);
+  }, { outside: true });
+}
+
+function drawSales(host, currencies) {
+  const p = current.params;
+  const range = salesRange(p);
+  const g = GRANS.includes(p.get("g")) ? p.get("g") : DEFAULT_GRAN[range.preset];
+  const cur = currencies.includes(p.get("cur")) ? p.get("cur") : (currencies.includes("HUF") ? "HUF" : currencies[0]);
+  const amt = p.get("amt") === "gross" ? "gross" : "net";
+  const by = BREAKDOWNS.includes(p.get("by")) ? p.get("by") : "customer";
+  const amount = (i) => cents(amt === "gross" ? (i.gross ?? i.net) : i.net);
+  const words = (p.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const customerOk = (c) =>
+    (!p.get("pm") || pmKey(c) === p.get("pm")) && (!p.get("region") || c.regionLabel === p.get("region")) &&
+    (!p.get("industry") || c.industryLabel === p.get("industry")) && (!p.get("country") || c.country === p.get("country")) &&
+    words.every((w) => c._s.includes(w));
+  const pFrom = shiftIsoYear(range.from, -1), pTo = shiftIsoYear(range.to, -1);
+
+  const keys = periodKeys(range.from, range.to, g);
+  const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
+  const groups = new Map(), others = new Map();
+  let total = 0, prevTotal = 0, count = 0, credits = 0, positive = 0;
+  for (const i of S.invoices) {
+    if (!i.date || !customerOk(i.c)) continue;
+    const inRange = i.date >= range.from && i.date <= range.to;
+    const inPrev = i.date >= pFrom && i.date <= pTo;
+    if (!inRange && !inPrev) continue;
+    if (i.cur !== cur) { if (inRange) addTo(others, i.cur, amount(i)); continue; }
+    const v = amount(i);
+    const [gk, glabel, ghref] = breakdownKey(by, i);
+    if (!groups.has(gk)) groups.set(gk, { key: gk, label: glabel, href: ghref, v: 0, prev: 0, n: 0 });
+    const grp = groups.get(gk);
+    if (inRange) {
+      const row = per.get(periodKey(i.date, g));
+      if (row) { row.v += v; if (i.credit) row.credits++; else row.n++; }
+      total += v; grp.v += v;
+      if (i.credit) credits++; else { count++; grp.n++; positive += v; }
+    }
+    if (inPrev) {
+      const row = per.get(shiftKeyYear(periodKey(i.date, g), 1));
+      if (row) row.prev += v;
+      prevTotal += v; grp.prev += v;
+    }
+  }
+  const periods = [...per.values()];
+  const delta = prevTotal ? (total - prevTotal) / Math.abs(prevTotal) : null;
+  const big = (c) => { const x = F.compactParts(c / 100, cur); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
+  const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const change = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
+  const rangeText = `${F.date(range.from)} – ${F.date(range.to)}`;
+
+  host.innerHTML = `
+    <section class="kpis">
+      ${tile(t(amt === "gross" ? "sales.kpi.gross" : "sales.kpi.net"), big(total), esc(rangeText), true)}
+      ${tile(t("sales.kpi.prev"), big(prevTotal), delta == null ? esc(`${F.date(pFrom)} – ${F.date(pTo)}`) : `${change(total, prevTotal)} · ${esc(`${F.date(pFrom)} – ${F.date(pTo)}`)}`)}
+      ${tile(t("sales.kpi.count"), esc(F.num(count)), esc(credits ? t("cust.creditCount", { n: F.num(credits) }) : ""))}
+      ${tile(t("sales.kpi.avg"), count ? big(Math.round(positive / count)) : "–", esc(t("sales.kpi.avgSub")))}
+    </section>
+    ${others.size ? `<div class="notice">${esc(t("sales.otherCur", { list: moneyList(others) }))}</div>` : ""}
+    <section class="card chart">
+      <div class="card-head"><h2>${esc(t("sales.chart"))}</h2><span class="sub">${esc(`${t(amt === "gross" ? "sales.gross" : "sales.net")}, ${cur}`)}</span></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>${esc(rangeText)}</span><span><i style="background:var(--bar-muted)"></i>${esc(t("sales.prevYear"))}</span></div>
+      <div id="sales-chart"></div>
+    </section>
+    <section class="card">
+        <div class="card-head"><h2>${esc(t("sales.periods"))}</h2><span class="sub">${esc(t("gran." + g))}</span></div>
+        <div class="table-wrap plain" style="max-height:480px;overflow:auto"><table>
+          <thead><tr><th>${esc(t("sales.col.period"))}</th><th class="num">${esc(t("sales.col.amount"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th class="num">${esc(t("sales.col.change"))}</th><th class="num">${esc(t("sales.col.count"))}</th></tr></thead>
+          <tbody>${[...periods].reverse().map((r) => `<tr><td>${esc(periodLabel(r.key, g))}</td><td class="num">${esc(F.money(r.v / 100, cur))}</td>
+            <td class="num muted">${esc(F.money(r.prev / 100, cur))}</td><td class="num">${change(r.v, r.prev)}</td><td class="num">${esc(F.num(r.n))}${r.credits ? ` <span class="muted">(−${r.credits})</span>` : ""}</td></tr>`).join("")}</tbody>
+        </table></div>
+      </section>
+    <section class="card">
+        <div class="card-head"><h2>${esc(t("by." + by))}</h2><span class="sub">${esc(rangeText)}</span></div>
+        <div id="sales-by"></div>
+      </section>
+`;
+
+  drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: periods.map((r) => r.prev / 100),
+    cur, mode: "compare", label: t("sales.chart") });
+  const rows = [...groups.values()].filter((r) => r.v || r.prev);
+  drawTable($("#sales-by", host), {
+    id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
+    columns: [
+      { key: "name", label: t("by." + by), value: (r) => r.label, html: (r) => (r.href ? `<a href="${r.href}">${esc(r.label)}</a>` : esc(r.label)), wrap: true },
+      { key: "amount", label: t("sales.col.amount"), num: true, value: (r) => r.v / 100, html: (r) => esc(F.money(r.v / 100, cur)) },
+      { key: "share", label: t("sales.col.share"), num: true, value: (r) => (total ? r.v / total : 0), html: (r) => esc(F.pct(total ? r.v / total : 0)) },
+      { key: "count", label: t("sales.col.count"), num: true, value: (r) => r.n },
+      { key: "prev", label: t("sales.prevYear"), num: true, value: (r) => r.prev / 100, html: (r) => `<span class="muted">${esc(F.money(r.prev / 100, cur))}</span>` },
+      { key: "change", label: t("sales.col.change"), num: true, value: (r) => (r.prev ? (r.v - r.prev) / Math.abs(r.prev) : null), html: (r) => change(r.v, r.prev) },
+    ],
+  });
+  return { g, cur, periods, preset: range.preset };
 }
 
 /* ---------- import status page ---------- */
@@ -1017,7 +1334,11 @@ function renderStatus(main) {
           <div class="card-head"><h2>${esc(t("status.sources"))}</h2></div>
           <dl class="rows">${["customers", "invoices"].map((k) => src[k] ? `<div><dt>${esc(t("status.ds." + k))}<br><span class="mono muted">${esc(src[k].file)}</span></dt>
             <dd>${esc(t("status.rows", { n: F.num(src[k].rows) }))}<br><span class="muted" style="font-weight:400">${esc(F.dateTime(new Date(src[k].exported_at)))}</span></dd></div>`
-            : `<div><dt>${esc(t("status.ds." + k))}</dt><dd class="none">${esc(t("status.noExport"))}</dd></div>`).join("")}</dl>
+            : `<div><dt>${esc(t("status.ds." + k))}</dt><dd class="none">${esc(t("status.noExport"))}</dd></div>`).join("")}
+            ${src.invoices?.kinds ? `<div><dt>${esc(t("status.kinds"))}</dt><dd>${Object.entries(src.invoices.kinds).map(([k, n]) => esc(`${k || "–"}: ${F.num(n)}`)).join("<br>")}</dd></div>` : ""}
+            ${src.invoices?.duplicates_merged ? `<div><dt>${esc(t("status.merged"))}</dt><dd>${esc(F.num(src.invoices.duplicates_merged))}</dd></div>` : ""}
+            ${src.invoices?.cancelled_flagged ? `<div><dt>${esc(t("status.cancelled"))}</dt><dd>${esc(F.num(src.invoices.cancelled_flagged))}</dd></div>` : ""}
+            ${src.invoices && !src.invoices.has_payments ? `<div><dt>${esc(t("status.payments"))}</dt><dd class="none">${esc(t("status.noPayments"))}</dd></div>` : ""}</dl>
         </section>
         ${cfgRows ? `<section class="card"><div class="card-head"><h2>${esc(t("status.config"))}</h2></div><dl class="rows">${cfgRows}</dl></section>` : ""}
       </div>
@@ -1100,7 +1421,8 @@ function openDetail(ref, updateHash = true) {
       ${fact(t("col.newYtd"), esc(F.num(m.newYtd)))}
       ${fact(t("col.foreign"), esc(F.num(m.foreign)))}
       ${fact(t("col.lastCreated"), esc(F.date(m.last)))}
-      ${S.hasInvoices ? fact(t("col.revenueYtd", { year: YEAR }), esc(moneyList(m.ytd))) + fact(t("col.openNet"), esc(moneyList(m.open))) : ""}
+      ${S.hasInvoices ? fact(t("col.revenueYtd", { year: YEAR }), esc(moneyList(m.ytd))) : ""}
+      ${S.hasPayments ? fact(t("col.openNet"), esc(moneyList(m.open))) : ""}
     </dl>
     <h3>${esc(t("d.customersOf"))} (${m.count}) · <a href="#customers?pm=${encodeURIComponent(key)}">${esc(t("d.all"))}</a></h3>
     <div class="table-wrap"><table><thead><tr><th>${esc(t("col.id"))}</th><th>${esc(t("col.name"))}</th><th>${esc(t("col.created"))}</th>
@@ -1170,7 +1492,7 @@ document.addEventListener("mousemove", (e) => {
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (["overview", "customer"].includes(current.view) && S.meta) route(); }, 250);
+  resizeTimer = setTimeout(() => { if (["overview", "customer", "sales"].includes(current.view) && S.meta) route(); }, 250);
 });
 
 buildFormatters();

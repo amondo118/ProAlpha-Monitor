@@ -61,21 +61,31 @@ postal_code      = "ISz"               # 2 ISz oszlop van; az első a cím irán
 
 
 # -----------------------------------------------------------------------------
-#  Számlák export – MÉG NINCS VALÓDI EXPORT
+#  Számlák export (számlafejek)
 # -----------------------------------------------------------------------------
-#  Az alábbi oszlopcímek PÉLDÁK (a tesztadatok ezeket használják). Amikor
-#  megérkezik a valódi számla-export, írja át őket a valódi oszlopcímekre.
-#  A számlák a vevőszám alapján kapcsolódnak a vevőkhöz.
-#  Később a számlatételek (cikkek) ugyanígy, egy új szakasszal adhatók hozzá.
+#  Egy sor = egy számla. A számlák a vevőszám alapján kapcsolódnak a vevőkhöz.
+#  Ugyanaz a számla az exportban többször is szerepelhet (azonos sorokként):
+#  ezeket a belső bizonylatazonosító (doc_id) alapján egyszer számolja.
+#  Később a számlatételek (cikkek) egy új szakasszal adhatók hozzá.
 [szamlak]
 felismeres = ["id", "customer_id", "date", "net"]
+# Ezek a számlatípusok (SzlT) negatív előjellel számítanak (jóváírás).
+# Az Import állapota fülön látszik, milyen típusok érkeztek az exportban.
+negativ_tipusok = ["Jóváírás"]
 
 [szamlak.oszlopok]
-id           = "Számlaszám"
-customer_id  = "Vevő"
-date         = "Számla kelte"
-due          = "Esedékesség"           # ha nincs: számla kelte + a vevő FizE napjai (becslés)
-net          = "Nettó érték"
-gross        = "Bruttó érték"
-currency     = "Pénznem"               # ISO kód (HUF) vagy Pn szám­kód is lehet
-cleared      = "Kiegyenlítés dátuma"   # üres = nyitott számla
+doc_id          = "V_BelegKopf_Obj"    # belső bizonylatazonosító (az ismétlődő sorok összevonásához)
+id              = "BizSz"              # számlaszám
+customer_id     = "Vevő"
+date            = "Bizonylatdátum"     # ez alapján kerül egy időszakba; teljesítés szerint: "Adódátum#3"
+tax_date        = "Adódátum#3"         # 3 Adódátum oszlop van; csak a harmadik van kitöltve
+net             = "Végösszeg"          # nettó végösszeg
+gross           = "Br. végösszeg"      # bruttó végösszeg
+currency        = "Pn"                 # kód → pénznem: kodlistak.toml [penznemek]
+kind            = "SzlT"               # számlatípus (Számla, Jóváírás, …)
+cancelled       = "Sto"                # sztornózva (Igen/Nem)
+origin          = "BF"                 # A = rendelésből, L = szállítólevélből
+clerk           = "Ügyintéző"          # a számlát kiállító felhasználó
+# Fizetési adat (kiegyenlítés dátuma) nincs a számlafej-exportban, ezért a
+# nyitott számlák nézet ki van kapcsolva. Ha lesz ilyen oszlop:
+# cleared       = "…"

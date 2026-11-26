@@ -77,6 +77,7 @@ the raw code without warnings.
 | Ügyintézők | Per Ügyintéző: customers, share, new, foreign, last new customer (+ sales / open invoices once invoices exist) |
 | Vevők | All customers with filters (Ügyintéző, country, region, industry, created date, search) and CSV export |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
+| Értékesítés (Sales) | Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
 | ⚠ tab (right end of the tab bar) | Import status: warnings from the last import (searchable), stale-data alert, data sources with row counts, skipped blocked customers. The icon is grey when all is well, amber with a count when there are warnings, red when the export is overdue |
 
 Filters, sorting and the open customer are in the URL: links can be shared and bookmarked.
@@ -87,25 +88,29 @@ The layout is saved per table in the browser; "Oszlopok alaphelyzetbe" resets it
 CSV export uses the displayed column order. The theme switch (Automatikus / Világos /
 Sötét) is next to the language switch.
 
-## Invoices and articles: how they plug in
+## The invoice export (proALPHA invoice headers)
 
-The importer treats every export the same way: definition of field types in
-`importer/datasets.py` (`FIELDS`), column titles in `config/oszlopok.toml`.
+One row = one invoice header. Columns used (see `[szamlak]` in `config/oszlopok.toml`):
 
-- **Invoices** are already wired end to end. The `[szamlak]` section in
-  `oszlopok.toml` holds EXAMPLE column titles (used by the fake data). When the real
-  invoice export arrives, replace them with the real titles; nothing else changes.
-  Invoices link to customers by customer number; invoices of blocked or unknown
-  customers are skipped and reported. Without a due date column, the due date is
-  estimated as invoice date + the customer's FizE days (marked with *).
-  Until the export exists, the invoice parts of the page say "not connected yet".
-- **Invoice lines / articles** (later): add a `szamlatetelek` entry to `FIELDS`
-  (invoice number, article, quantity, net…), a matching section in `oszlopok.toml`,
-  and aggregate per customer / article in the importer. Raw lines can be large;
-  pre-aggregating them in the importer keeps the page fast.
+| CSV column | Field | Notes |
+|---|---|---|
+| V_BelegKopf_Obj | `doc_id` | internal document ID. The export repeats some invoices on identical rows; they are merged by this ID (count shown on the ⚠ status tab) |
+| BizSz | `id` | invoice number |
+| Vevő | `customer_id` | links the invoice to the customer |
+| Bizonylatdátum | `date` | decides the period. For the date of supply use `"Adódátum#3"` |
+| Végösszeg / Br. végösszeg | `net` / `gross` | net = gross / 1.27 for domestic customers, equal for EU reverse charge |
+| Pn | `currency` | same code list as the customer export |
+| SzlT | `kind` | invoice type. Types listed in `negativ_tipusok` (default "Jóváírás") count negative |
+| Sto | `cancelled` | counted on the status tab |
+| BF, Ügyintéző | `origin`, `clerk` | A = from an order, L = from a delivery note; the issuing user |
 
-Large lists (invoices) are written to `data.json` as `{fields, rows}` tables; the
-page expands them on load. 40 000 invoices ≈ 1 MB over the network.
+- The exchange rate column (Valutaárf.) is always 1, so currencies are never converted:
+  every total is per currency.
+- The export has no payment data, so open invoices are switched off (the customer page
+  shows the latest invoices instead). With a payment-date column, add `cleared = "…"`.
+- Invoices of blocked or unknown customers are skipped and reported.
+- Invoice lines / articles (later): add a `szamlatetelek` entry to `FIELDS` in
+  `importer/datasets.py` and a matching section in `oszlopok.toml`.
 
 ## Data quality and precision
 

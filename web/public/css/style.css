@@ -224,6 +224,15 @@ td.wrap { white-space: normal; min-width: 200px; }
 
 /* ---------- charts ---------- */
 .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-2); font-size: 12px; margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+/* segmented switch (customer sales chart: year / half / quarter / month) */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { background: var(--surface); color: var(--text-2); border: 0; border-right: 1px solid var(--border); border-radius: 0; padding: 4px 10px; font-size: 12px; font-weight: 500; }
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--surface-2); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
 .chart .gridline { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .baseline { stroke: var(--text-3); stroke-width: 1; }
 .chart .axis-label { fill: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
