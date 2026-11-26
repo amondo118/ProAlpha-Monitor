@@ -122,6 +122,7 @@ async function load() {
     const [meta, data] = await Promise.all([fetchJson("data/meta.json"), fetchJson("data/data.json")]);
     S.meta = meta;
     index(data);
+    S.checks = null; // recomputed for the new data
     renderChrome();
     route();
   } catch (e) {
@@ -186,7 +187,8 @@ function index(data) {
   S.managers = new Map();
   for (const c of S.customers) {
     const k = pmKey(c);
-    if (!S.managers.has(k)) S.managers.set(k, { key: k, customers: [], count: 0, new30: 0, newYtd: 0, foreign: 0, last: null, ytd: new Map(), open: new Map() });
+    if (!S.managers.has(k)) S.managers.set(k, { key: k, customers: [], count: 0, new30: 0, newYtd: 0, foreign: 0, last: null,
+      ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), active: 0, activePrev: 0, invoices: [] });
     const m = S.managers.get(k);
     m.customers.push(c);
     m.count++;
@@ -195,7 +197,12 @@ function index(data) {
     if (c.country && c.country !== CONFIG.homeCountry) m.foreign++;
     if (c.created && (!m.last || c.created > m.last)) m.last = c.created;
     for (const [cur, v] of c.st.ytd) addTo(m.ytd, cur, v);
+    for (const [cur, v] of c.st.prev) addTo(m.prev, cur, v);
+    for (const [cur, v] of c.st.total) addTo(m.total, cur, v);
     for (const [cur, v] of c.st.open) addTo(m.open, cur, v);
+    if (c.st.ytdCount + c.st.ytdCredits) m.active++;
+    if (c.st.prevCount) m.activePrev++;
+    for (const i of c.invoices) m.invoices.push(i);
   }
   for (const m of S.managers.values()) m._s = pmName(m.key).toLowerCase();
 }
@@ -203,7 +210,7 @@ function index(data) {
 /* Per-customer invoice figures, per currency in cents. */
 function customerStats(c) {
   const st = { ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), byYear: new Map(),
-    openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, count: 0, firstDate: null };
+    openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
   const counts = new Map();
   for (const i of c.invoices) {
     const v = cents(i.net);
@@ -212,6 +219,7 @@ function customerStats(c) {
     st.count++;
     if (i.date && (!st.firstDate || i.date < st.firstDate)) st.firstDate = i.date;
     if (i.date >= PERIOD.ytd) { if (i.credit) st.ytdCredits++; else st.ytdCount++; }
+    if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) st.prevCount++;
     if (i.date) {
       const y = +i.date.slice(0, 4);
       if (!st.byYear.has(y)) st.byYear.set(y, new Map());
@@ -236,7 +244,7 @@ function customerStats(c) {
 
 /* ---------- routing & URL state ---------- */
 
-const VIEWS = ["overview", "sales", "managers", "customers", "customer", "status"];
+const VIEWS = ["overview", "sales", "managers", "customers", "customer", "manager", "status"];
 const TABS = ["overview", "sales", "customers", "managers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
@@ -263,11 +271,9 @@ function route() {
   const main = $("#view");
   main.innerHTML = "";
   viewUpdate = null;
-  ({ overview: renderOverview, sales: renderSales, managers: renderManagers, customers: renderCustomers, customer: renderCustomer, status: renderStatus })[current.view](main);
-  const open = current.params.get("open");
-  if (open) openDetail(open, false);
-  else if ($("#detail").open) $("#detail").close();
-  if (current.view === "customer") window.scrollTo(0, 0);
+  ({ overview: renderOverview, sales: renderSales, managers: renderManagers, customers: renderCustomers,
+    customer: renderCustomer, manager: renderManager, status: renderStatus })[current.view](main);
+  if (current.view === "customer" || current.view === "manager") window.scrollTo(0, 0);
 }
 
 const customerHref = (id) => `#customer?id=${encodeURIComponent(id)}`;
@@ -281,7 +287,6 @@ function applyStaticText() {
   $("#lang").value = LANG;
   $("#theme").value = document.documentElement.dataset.theme || "auto";
   $("#theme").setAttribute("aria-label", t("theme"));
-  $("#detail-close").setAttribute("aria-label", t("d.close"));
   $("#global-q").placeholder = t("search.placeholder", { id: S.customers[0]?.id ?? "3000095" });
 }
 
@@ -296,9 +301,9 @@ const WARN_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="
   stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.2" fill="currentColor"/></svg>`;
 
 function renderTabs() {
-  const active = current.view === "customer" ? "customers" : current.view;
+  const active = current.view === "customer" ? "customers" : current.view === "manager" ? "managers" : current.view;
   const st = importStatus();
-  const label = st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: st.count }) : t("status.ok");
+  const label = st.failed ? t("chk.failed", { n: st.failed }) : st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: st.count }) : t("status.ok");
   $("#tabs").innerHTML = TABS.map((v) =>
     `<a href="#${v}"${v === active ? ' aria-current="page"' : ""}>${esc(t("nav." + v))}</a>`).join("") +
     `<a href="#status" class="tab-icon${st.stale ? " bad" : st.count ? " warn" : ""}"${active === "status" ? ' aria-current="page"' : ""}
@@ -306,14 +311,59 @@ function renderTabs() {
       st.count || st.stale ? `<span class="count">${st.stale && !st.count ? "!" : esc(F.num(st.count))}</span>` : ""}</a>`;
 }
 
-/* Import health: warning count and whether the export is overdue. */
+/* Self-check: the page recomputes the importer's control totals in several
+   independent ways (from the invoices, from the customers, from the Ügyintézők,
+   period by period). Any mismatch shows on the status tab and turns it red. */
+function computeChecks() {
+  const m = S.meta, checks = [];
+  if (!m) return checks;
+  const add = (label, ok, detail) => checks.push({ label, ok, detail });
+  const fmtMap = (map, money) => [...map.entries()].sort().map(([c, v]) => (money ? F.money(v / 100, c) : `${c} ${F.num(v)}`)).join(" · ") || "–";
+  const same = (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+  const ref = m.checks || {};
+  if (ref.customers != null) add(t("chk.customers"), ref.customers === S.customers.length, `${F.num(ref.customers)} / ${F.num(S.customers.length)}`);
+  const src = m.sources?.invoices;
+  if (src?.raw_rows != null) {
+    const sum = src.rows + (src.skipped_rows || 0) + src.skipped_blocked + src.duplicates_merged;
+    add(t("chk.rows"), sum === src.raw_rows, t("chk.rowsDetail", { raw: F.num(src.raw_rows), rows: F.num(src.rows), skipped: F.num(src.skipped_rows || 0),
+      blocked: F.num(src.skipped_blocked), merged: F.num(src.duplicates_merged) }));
+  }
+  if (!S.hasInvoices) return checks;
+  // 1) the page's invoices vs the importer's control totals
+  const count = new Map(), net = new Map();
+  for (const i of S.invoices) if (i.date) { count.set(i.cur, (count.get(i.cur) || 0) + 1); addTo(net, i.cur, cents(i.net)); }
+  const refCount = new Map(Object.entries(ref.invoices_by_currency || {})), refNet = new Map(Object.entries(ref.net_cents_by_currency || {}));
+  add(t("chk.count"), same(count, refCount), fmtMap(count));
+  add(t("chk.net"), same(net, refNet), fmtMap(net, true));
+  // 2) the same sums via the customers and via the Ügyintézők
+  const allNet = new Map(); for (const i of S.invoices) addTo(allNet, i.cur, cents(i.net));
+  const viaCustomers = new Map(); for (const c of S.customers) for (const [k, v] of c.st.total) addTo(viaCustomers, k, v);
+  const viaManagers = new Map(); for (const mg of S.managers.values()) for (const [k, v] of mg.total) addTo(viaManagers, k, v);
+  add(t("chk.customersSum"), same(allNet, viaCustomers), t("chk.same"));
+  add(t("chk.managersSum"), same(allNet, viaManagers) && [...S.managers.values()].reduce((s, mg) => s + mg.count, 0) === S.customers.length, t("chk.same"));
+  // 3) every invoice lands in exactly one period, at every breakdown
+  let periodsOk = true;
+  for (const g of ["week", "month", "quarter", "half", "year"]) {
+    const sums = new Map();
+    for (const i of S.invoices) if (i.date) addTo(sums, `${i.cur}|${periodStart(periodKey(i.date, g), g) <= i.date && i.date < nextPeriodStart(periodKey(i.date, g), g)}`, cents(i.net));
+    const bad = [...sums.keys()].some((k) => k.endsWith("false"));
+    const byCur = new Map(); for (const [k, v] of sums) addTo(byCur, k.split("|")[0], v);
+    if (bad || !same(byCur, net)) periodsOk = false;
+  }
+  add(t("chk.periods"), periodsOk, t("chk.periodsDetail"));
+  return checks;
+}
+
+/* Import health: warning count, failed checks, and whether the export is overdue. */
 function importStatus() {
   const m = S.meta;
-  if (!m) return { count: 0, stale: false, hours: 0 };
+  if (!m) return { count: 0, stale: false, hours: 0, failed: 0 };
   const exported = new Date(m.exported_at || m.generated_at);
   const hours = (Date.now() - exported) / 3600000;
   const allowed = CONFIG.staleHours + (CONFIG.exportsOnWeekends ? 0 : 24 * weekendDaysBetween(exported, new Date()));
-  return { count: m.warning_count || 0, stale: !m.fake && hours > allowed, hours };
+  if (!S.checks) S.checks = computeChecks();
+  const failed = S.checks.filter((c) => !c.ok).length;
+  return { count: m.warning_count || 0, stale: (!m.fake && hours > allowed) || failed > 0, hours, failed };
 }
 
 function agoText(ms) {
@@ -360,7 +410,8 @@ function showBanner(text, bad = false) {
 /* ---------- reusable bits ---------- */
 
 const custLink = (c, text = c.name || c.id, cls = "") => `<a href="${customerHref(c.id)}"${cls ? ` class="${cls}"` : ""}>${esc(text)}</a>`;
-const pmLink = (key) => (key === NONE ? `<span class="muted">${esc(t("none"))}</span>` : `<a href="#" data-open="pm:${esc(key)}">${esc(key)}</a>`);
+const managerHref = (key) => `#manager?id=${encodeURIComponent(key)}`;
+const pmLink = (key) => `<a href="${managerHref(key)}"${key === NONE ? ' class="muted"' : ""}>${esc(pmName(key))}</a>`;
 const newBadge = (c) => (c.isNew ? `<span class="badge new">${esc(F.date(c.created))}</span>` : esc(F.date(c.created)));
 /* Name with its SAP code on hover; an unknown code is shown as itself, marked. */
 const codeLabel = (name, code) => (name
@@ -803,35 +854,173 @@ function drawMonthly(host, rows) {
 
 /* ---------- account managers ---------- */
 
+const hufOf = (map) => (map.get("HUF") || 0) / 100;
+const changeHtml = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
+// Sales figures here are HUF (net); other currencies are listed separately, never added in.
 function managerColumns() {
-  const total = S.customers.length || 1;
+  const totalCustomers = S.customers.length || 1;
+  const totalHuf = [...S.managers.values()].reduce((s, m) => s + (m.ytd.get("HUF") || 0), 0);
   const cols = [
     { key: "name", label: t("col.manager"), value: (m) => pmName(m.key), html: (m) => pmLink(m.key), wrap: true },
     { key: "count", label: t("col.customers"), num: true, value: (m) => m.count,
       html: (m) => `<a href="#customers?pm=${encodeURIComponent(m.key)}">${esc(F.num(m.count))}</a>` },
-    { key: "share", label: t("col.share"), num: true, value: (m) => m.count / total, html: (m) => esc(F.pct(m.count / total)) },
-    { key: "new30", label: t("col.new30"), num: true, value: (m) => m.new30,
-      html: (m) => (m.new30 ? `<span class="badge new">${esc(F.num(m.new30))}</span>` : "0") },
+  ];
+  if (S.hasInvoices) {
+    cols.push(
+      { key: "active", label: t("mgr.col.active", { year: YEAR }), num: true, value: (m) => m.active },
+      { key: "ytd", label: t("mgr.col.ytd", { year: YEAR }), num: true, value: (m) => hufOf(m.ytd), html: (m) => esc(F.money(hufOf(m.ytd), "HUF")) },
+      { key: "prev", label: t("mgr.col.prev"), num: true, value: (m) => hufOf(m.prev), html: (m) => `<span class="muted">${esc(F.money(hufOf(m.prev), "HUF"))}</span>` },
+      { key: "change", label: t("sales.col.change"), num: true, value: (m) => (hufOf(m.prev) ? (hufOf(m.ytd) - hufOf(m.prev)) / Math.abs(hufOf(m.prev)) : null),
+        html: (m) => changeHtml(hufOf(m.ytd), hufOf(m.prev)) },
+      { key: "salesShare", label: t("mgr.col.share"), num: true, value: (m) => (totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0),
+        html: (m) => esc(F.pct(totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0)) },
+      { key: "other", label: t("mgr.col.other"), value: (m) => moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))),
+        html: (m) => `<span class="muted">${esc(moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))))}</span>` });
+    if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (m) => hufOf(m.open), html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
+  } else {
+    cols.push({ key: "share", label: t("col.share"), num: true, value: (m) => m.count / totalCustomers, html: (m) => esc(F.pct(m.count / totalCustomers)) });
+  }
+  cols.push(
+    { key: "new30", label: t("col.new30"), num: true, value: (m) => m.new30, html: (m) => (m.new30 ? `<span class="badge new">${esc(F.num(m.new30))}</span>` : "0") },
     { key: "newYtd", label: t("col.newYtd"), num: true, value: (m) => m.newYtd },
     { key: "foreign", label: t("col.foreign"), num: true, value: (m) => m.foreign },
     { key: "last", label: t("col.lastCreated"), value: (m) => m.last, html: (m) => esc(F.date(m.last)) },
-  ];
-  if (S.hasInvoices) {
-    // Sorted by the HUF part; the full per-currency list is shown
-    cols.push({ key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (m) => (m.ytd.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.ytd)), csv: (m) => moneyList(m.ytd) });
-    if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (m) => (m.open.get("HUF") || 0) / 100, html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
-  }
+  );
   return cols;
 }
+const MANAGER_TABLE = "managers-v2";
 
 function renderManagers(main) {
   const p = current.params;
+  const managers = [...S.managers.values()];
+  const named = managers.filter((m) => m.key !== NONE);
+  const none = S.managers.get(NONE);
   let rows = [];
   filteredView(main, fSearch("q", "f.searchManagers"), (host) => {
     const q = (p.get("q") || "").toLowerCase();
-    rows = [...S.managers.values()].filter((m) => !q || m._s.includes(q));
-    rows = drawTable(host, { columns: managerColumns(), rows, defaultSort: "-count", total: S.managers.size });
-  }, () => exportCsv("ugyintezok", layoutColumns("managers", managerColumns()), rows));
+    rows = managers.filter((m) => !q || m._s.includes(q));
+    rows = drawTable(host, { id: MANAGER_TABLE, columns: managerColumns(), rows, defaultSort: S.hasInvoices ? "-ytd" : "-count", total: managers.length,
+      totals: S.hasInvoices ? esc(t("mgr.hufNote")) : "" });
+  }, () => exportCsv("ugyintezok", layoutColumns(MANAGER_TABLE, managerColumns()), rows));
+
+  // Summary above the table
+  const tile = (label, value, sub, hl = false) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const big = (v) => { const x = F.compactParts(v, "HUF"); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
+  const totalYtd = managers.reduce((s, m) => s + hufOf(m.ytd), 0), totalPrev = managers.reduce((s, m) => s + hufOf(m.prev), 0);
+  const bars = (list, value, fmt, tip) => hbars(list.filter((m) => value(m)).sort((a, b) => value(b) - value(a)).map((m) => ({ label: pmLink(m.key), value: value(m), tip: tip(m) })), fmt);
+  main.insertAdjacentHTML("afterbegin", `
+    <section class="kpis">
+      ${tile(t("mgr.kpi.count"), esc(F.num(named.length)), esc(t("mgr.kpi.countSub", { n: F.num(S.customers.length) })), !S.hasInvoices)}
+      ${S.hasInvoices ? tile(t("kpi.salesYtd", { year: YEAR }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
+      ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
+      ${tile(t("mgr.kpi.avg"), esc(F.num(named.length ? Math.round(named.reduce((s, m) => s + m.count, 0) / named.length) : 0)), esc(t("mgr.kpi.avgSub")))}
+    </section>
+    <div class="grid-2">
+      ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { year: YEAR }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
+        ${bars(managers, (m) => hufOf(m.ytd), (v) => compactMoney(v, "HUF"), (m) => `${pmName(m.key)}\n${F.money(hufOf(m.ytd), "HUF")}`)}</section>` : ""}
+      <section class="card"><div class="card-head"><h2>${esc(t("chart.byManager"))}</h2></div>
+        ${bars(managers, (m) => m.count, (v) => F.num(v), (m) => `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}`)}</section>
+    </div>`);
+}
+
+/* ---------- account manager page ---------- */
+
+function renderManager(main) {
+  const key = current.params.get("id");
+  const m = S.managers.get(key);
+  if (!m) {
+    main.innerHTML = `<div class="notice bad">${esc(t("mgr.notFound", { name: key }))}</div><a class="back" href="#managers">${esc(t("mgr.back"))}</a>`;
+    return;
+  }
+  const name = pmName(key);
+  document.title = `${name} – ${t("app.title")}`;
+  const tile = (label, value, sub, hl = false) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const big = (v) => { const x = F.compactParts(v, "HUF"); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
+  const deltaText = (a, b, k = "cust.vsPrev") => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(t(k, { pct: F.signedPct((a - b) / Math.abs(b)) }))}</span>` : "");
+
+  // last month (HUF), active customers, industries, top customer
+  const lmKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 1, 1)), "month"), lmPrevKey = shiftKeyYear(lmKey, -1);
+  let lm = 0, lmPrev = 0;
+  const byIndustry = new Map();
+  for (const i of m.invoices) {
+    if (i.cur !== "HUF" || !i.date) continue;
+    const k = periodKey(i.date, "month");
+    if (k === lmKey) lm += cents(i.net);
+    if (k === lmPrevKey) lmPrev += cents(i.net);
+    if (i.date >= PERIOD.ytd) addTo(byIndustry, i.c.industryLabel || "", cents(i.net));
+  }
+  const top = [...m.customers].sort((a, b) => (b.st.ytd.get("HUF") || 0) - (a.st.ytd.get("HUF") || 0))[0];
+  const topIndustry = [...byIndustry.entries()].sort((a, b) => b[1] - a[1])[0];
+  const latest = [...m.customers].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created)).slice(0, 6);
+  const chip = (label, value, href) => `<a class="chip" href="${href}"><b>${esc(label)}</b>${esc(value)}</a>`;
+
+  const kpis = S.hasInvoices ? [
+    tile(t("kpi.salesYtd", { year: YEAR }), big(hufOf(m.ytd)), deltaText(hufOf(m.ytd), hufOf(m.prev)), true),
+    tile(t("ov.lastMonth", { month: F.monthYear(lmKey) }), big(lm / 100), deltaText(lm, lmPrev, "ov.vsPrevMonth")),
+    tile(t("ov.active", { year: YEAR }), esc(F.num(m.active)), esc(t("mgr.activeSub", { n: F.num(m.activePrev), all: F.num(m.count) }))),
+    tile(t("kpi.newYtd"), esc(F.num(m.newYtd)), esc(t("mgr.new30", { n: F.num(m.new30) }))),
+  ] : [
+    tile(t("col.customers"), esc(F.num(m.count)), esc(t("kpi.foreignSub", { n: m.foreign })), true),
+    tile(t("kpi.newYtd"), esc(F.num(m.newYtd)), esc(t("mgr.new30", { n: F.num(m.new30) }))),
+  ];
+
+  main.innerHTML = `
+    <a class="back" href="#managers">${esc(t("mgr.back"))}</a>
+    <section class="cust-head">
+      <div class="avatar" aria-hidden="true">${esc(key === NONE ? "?" : initials(name))}</div>
+      <div>
+        <div class="eyebrow">${esc(t("mgr.label"))}</div>
+        <h1>${esc(name)}</h1>
+        <div class="chips">
+          ${chip(t("col.customers"), F.num(m.count), `#customers?pm=${encodeURIComponent(key)}`)}
+          ${S.hasInvoices ? chip(t("mgr.chipActive", { year: YEAR }), F.num(m.active), `#sales?r=ytd&pm=${encodeURIComponent(key)}`) : ""}
+          ${chip(t("col.foreign"), F.num(m.foreign), `#customers?pm=${encodeURIComponent(key)}&sort=country`)}
+        </div>
+      </div>
+      <div class="cust-contact">
+        ${S.hasInvoices ? `<div class="eyebrow">${esc(t("mgr.topCustomer", { year: YEAR }))}</div><div>${top && top.st.ytd.get("HUF") ? `${custLink(top)} · ${esc(compactMoney(hufOf(top.st.ytd), "HUF"))}` : "–"}</div>
+        <div class="eyebrow">${esc(t("mgr.topIndustry", { year: YEAR }))}</div><div>${topIndustry ? `${esc(topIndustry[0] || t("none"))} · ${esc(compactMoney(topIndustry[1] / 100, "HUF"))}` : "–"}</div>` : ""}
+      </div>
+    </section>
+    <section class="kpis">${kpis.join("")}</section>
+    <div class="cust-grid">
+      <div class="stack">
+        ${S.hasInvoices ? `<section class="card chart">
+          <div class="card-head"><h2>${esc(t("cust.revenueBy"))}</h2>${granSwitch(custGran(), CUST_GRANS)}</div>
+          <div id="mgr-chart"></div><div class="card-foot">${esc(t("mgr.chartFoot"))}</div>
+        </section>` : ""}
+        <section class="card">
+          <div class="card-head"><h2>${esc(t("d.customersOf"))} (${esc(F.num(m.count))})</h2><a class="sub" href="#sales?r=ytd&by=customer&pm=${encodeURIComponent(key)}">${S.hasInvoices ? esc(t("mgr.toSales")) : ""}</a></div>
+          <div id="mgr-customers"></div>
+        </section>
+      </div>
+      <div class="stack">
+        ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { year: YEAR }))}</h2></div>
+          <dl class="rows">${currencyOrder().filter((c) => m.ytd.has(c)).map((c) => `<div><dt><a href="#sales?r=ytd&cur=${encodeURIComponent(c)}&pm=${encodeURIComponent(key)}"><b>${esc(c)}</b></a></dt>
+            <dd>${esc(F.money(m.ytd.get(c) / 100, c))}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
+        <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { year: YEAR }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
+          ${hbars([...byIndustry.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: esc(k || t("none")), value: v / 100, tip: `${k || t("none")}\n${F.money(v / 100, "HUF")}` })), (v) => compactMoney(v, "HUF"))}</section>` : ""}
+        <section class="card"><div class="card-head"><h2>${esc(t("chart.latest"))}</h2></div>
+          <dl class="rows">${latest.map((c) => `<div><dt>${custLink(c)}</dt><dd class="none">${newBadge(c)}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
+      </div>
+    </div>`;
+
+  if (S.hasInvoices) {
+    drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF");
+    onGranSwitch(main, () => drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF"));
+  }
+  const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
+  const cols = [
+    { key: "name", label: t("col.name"), value: (c) => c.name, html: (c) => custLink(c), wrap: true },
+    ...(S.hasInvoices ? [
+      { key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)) },
+      { key: "change", label: t("sales.col.change"), num: true, value: (c) => (c.st.main(c.st.prev) ? (c.st.main(c.st.ytd) - c.st.main(c.st.prev)) / Math.abs(c.st.main(c.st.prev)) : null),
+        html: (c) => `<span title="${esc(`${t("mgr.col.prev")}: ${money(c, c.st.prev)}`)}">${changeHtml(c.st.main(c.st.ytd), c.st.main(c.st.prev))}</span>` },
+      { key: "inv", label: t("mgr.col.invoices", { year: YEAR }), num: true, value: (c) => c.st.ytdCount },
+    ] : []),
+    { key: "industry", label: t("col.industry"), value: (c) => c.industryLabel, html: (c) => codeLabel(c.industry, c.industry_code) },
+  ];
+  drawTable($("#mgr-customers"), { id: "manager-customers", columns: cols, rows: m.customers, defaultSort: S.hasInvoices ? "-ytd" : "name", pageSize: 25 });
 }
 
 /* ---------- customers list ---------- */
@@ -1021,13 +1210,7 @@ function renderCustomer(main) {
       ${src("invoices") ? "" : `<code>${esc(t("cust.noFile"))}</code>`}
     </footer>`;
   if (S.hasInvoices && c.invoices.length) drawCustomerPeriods($("#years"), c);
-  main.querySelector(".seg")?.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-gran]");
-    if (!b) return;
-    setParams({ g: b.dataset.gran });
-    main.querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
-    drawCustomerPeriods($("#years"), c);
-  });
+  onGranSwitch(main, () => drawCustomerPeriods($("#years"), c));
 }
 
 /* Latest invoices (when the export has no payment data, open invoices can't be shown). */
@@ -1050,14 +1233,25 @@ function granSwitch(active, grans) {
   return `<div class="seg" role="group" aria-label="${esc(t("sales.gran"))}">${grans.map((g) =>
     `<button type="button" data-gran="${g}" aria-pressed="${g === active}">${esc(t("gran." + g))}</button>`).join("")}</div>`;
 }
-function drawCustomerPeriods(host, c) {
-  const g = custGran(), st = c.st;
-  let keys = periodKeys(st.firstDate || TODAY, TODAY, g);
-  keys = keys.slice(-CUST_PERIODS[g]);
+function drawCustomerPeriods(host, c) { drawInvoicePeriods(host, c.invoices, c.st.cur); }
+/* The last few periods of these invoices in one currency, the current period highlighted. */
+function drawInvoicePeriods(host, invoices, cur) {
+  const g = custGran();
+  const first = invoices.reduce((a, i) => (i.cur === cur && i.date && (!a || i.date < a) ? i.date : a), null) || TODAY;
+  const keys = periodKeys(first, TODAY, g).slice(-CUST_PERIODS[g]);
   const sums = new Map();
-  for (const i of c.invoices) if (i.cur === st.cur && i.date) addTo(sums, periodKey(i.date, g), cents(i.net));
-  drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur: st.cur, mode: "highlight",
-    label: t("cust.revenueBy") });
+  for (const i of invoices) if (i.cur === cur && i.date) addTo(sums, periodKey(i.date, g), cents(i.net));
+  drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur, mode: "highlight", label: t("cust.revenueBy") });
+}
+/* Wire a year/half/quarter/month switch to a redraw function. */
+function onGranSwitch(root, redraw) {
+  root.querySelector(".seg[role=group]:not([data-param])")?.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-gran]");
+    if (!b) return;
+    setParams({ g: b.dataset.gran });
+    b.parentElement.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    redraw();
+  });
 }
 
 function openInvoicesHtml(c) {
@@ -1353,7 +1547,6 @@ function drawSales(host, currencies) {
       prevTotal += v; grp.prev += v;
     }
   }
-  const others = new Map([...byCur].filter(([c, v]) => c !== cur && v));
   const periods = [...per.values()];
   const big = (c) => { const x = F.compactParts(c / 100, cur); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
   const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
@@ -1374,7 +1567,6 @@ function drawSales(host, currencies) {
       ${tile(t("sales.kpi.count"), esc(F.num(count)), esc(credits ? t("cust.creditCount", { n: F.num(credits) }) : ""))}
       ${tile(t("sales.kpi.avg"), count ? big(Math.round(positive / count)) : "–", esc(t("sales.kpi.avgSub")))}
     </section>
-    ${others.size ? `<div class="notice">${esc(t("sales.otherCur", { list: moneyList(others) }))}</div>` : ""}
     <div class="grid-2 sales-pair">
       <section class="card chart">
         <div class="card-head"><h2>${esc(t("sales.chart"))}</h2><span class="sub">${esc(`${t(amt === "gross" ? "sales.gross" : "sales.net")}, ${cur}`)}</span></div>
@@ -1420,7 +1612,7 @@ function renderStatus(main) {
   const exported = new Date(m.exported_at || m.generated_at), imported = new Date(m.generated_at);
   const src = m.sources || {};
   const blocked = src.customers?.skipped_blocked || 0, blockedInv = src.invoices?.skipped_blocked || 0;
-  const stateText = st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: F.num(st.count) }) : t("status.okShort");
+  const stateText = st.failed ? t("chk.failed", { n: st.failed }) : st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: F.num(st.count) }) : t("status.okShort");
   const stateCls = st.stale ? "delta-down" : st.count ? "" : "status-ok";
   const tile = (label, value, sub, hl = false) =>
     `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${esc(sub)}</div></div>`;
@@ -1430,7 +1622,7 @@ function renderStatus(main) {
 
   main.innerHTML = `
     <section class="kpis">
-      ${tile(t("status.state"), `<span class="${stateCls}">${esc(stateText)}</span>`, st.stale ? t("banner.stale", { n: Math.round(st.hours) }) : "", true)}
+      ${tile(t("status.state"), `<span class="${stateCls}">${esc(stateText)}</span>`, st.failed ? t("chk.failedSub") : st.stale ? t("banner.stale", { n: Math.round(st.hours) }) : "", true)}
       ${tile(t("status.exported"), esc(F.date(isoDate(exported))), `${F.dateTime(exported)} · ${agoText(Date.now() - exported)}`)}
       ${tile(t("status.imported"), esc(F.date(isoDate(imported))), `${F.dateTime(imported)} · ${agoText(Date.now() - imported)}`)}
       ${tile(t("status.blocked"), esc(F.num(blocked)), blockedInv ? t("status.blockedInv", { n: F.num(blockedInv) }) : "")}
@@ -1446,6 +1638,11 @@ function renderStatus(main) {
         <div class="card-foot">${esc(t("status.log"))} <code class="mono">docker compose logs importer</code></div>
       </section>
       <div class="stack">
+        <section class="card">
+          <div class="card-head"><h2>${esc(t("chk.title"))}</h2><span class="sub">${esc(t("chk.sub"))}</span></div>
+          <dl class="rows">${(S.checks || []).map((c) => `<div><dt>${c.ok ? '<span class="status-ok">✓</span>' : '<span class="delta-down">✗</span>'} ${esc(c.label)}<br>
+            <span class="muted mono" style="font-size:11px">${esc(c.detail)}</span></dt><dd class="${c.ok ? "status-ok" : "delta-down"}">${esc(t(c.ok ? "chk.ok" : "chk.bad"))}</dd></div>`).join("")}</dl>
+        </section>
         <section class="card">
           <div class="card-head"><h2>${esc(t("status.sources"))}</h2></div>
           <dl class="rows">${["customers", "invoices"].map((k) => src[k] ? `<div><dt>${esc(t("status.ds." + k))}<br><span class="mono muted">${esc(src[k].file)}</span></dt>
@@ -1520,58 +1717,8 @@ function searchCustomers(q, limit = 8) {
   });
 })();
 
-/* ---------- account manager detail dialog ---------- */
-
-const fact = (label, value) => `<div><dt>${esc(label)}</dt><dd>${value || "–"}</dd></div>`;
-
-function openDetail(ref, updateHash = true) {
-  const i = ref.indexOf(":");
-  const [type, key] = [ref.slice(0, i), ref.slice(i + 1)];
-  if (type !== "pm") return;
-  const m = S.managers.get(key);
-  if (!m) return;
-  const rows = [...m.customers].sort((a, b) => (b.created || "").localeCompare(a.created || ""));
-  const body = `<dl class="facts">
-      ${fact(t("col.customers"), `<b>${esc(F.num(m.count))}</b>`)}
-      ${fact(t("col.new30"), esc(F.num(m.new30)))}
-      ${fact(t("col.newYtd"), esc(F.num(m.newYtd)))}
-      ${fact(t("col.foreign"), esc(F.num(m.foreign)))}
-      ${fact(t("col.lastCreated"), esc(F.date(m.last)))}
-      ${S.hasInvoices ? fact(t("col.revenueYtd", { year: YEAR }), esc(moneyList(m.ytd))) : ""}
-      ${S.hasPayments ? fact(t("col.openNet"), esc(moneyList(m.open))) : ""}
-    </dl>
-    <h3>${esc(t("d.customersOf"))} (${m.count}) · <a href="#customers?pm=${encodeURIComponent(key)}">${esc(t("d.all"))}</a></h3>
-    <div class="table-wrap"><table><thead><tr><th>${esc(t("col.id"))}</th><th>${esc(t("col.name"))}</th><th>${esc(t("col.created"))}</th>
-      <th>${esc(t("col.city"))}</th><th>${esc(t("col.industry"))}</th>${S.hasInvoices ? `<th class="num">${esc(t("col.revenueYtd", { year: YEAR }))}</th>` : ""}</tr></thead>
-    <tbody>${rows.map((c) => `<tr><td>${custLink(c, c.id, "mono")}</td><td class="wrap">${custLink(c)}</td><td>${newBadge(c)}</td>
-      <td>${esc(c.city)}</td><td>${codeLabel(c.industry, c.industry_code)}</td>
-      ${S.hasInvoices ? `<td class="num">${esc(F.money(c.st.main(c.st.ytd) || null, c.st.cur))}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
-
-  const dlg = $("#detail");
-  dlg.dataset.ref = ref;
-  $("#detail-title").textContent = t("d.manager", { name: pmName(key) });
-  $("#detail-body").innerHTML = body;
-  dlg.scrollTop = 0;
-  if (!dlg.open) dlg.showModal();
-  if (updateHash) setParams({ open: ref });
-}
-
 /* ---------- global events ---------- */
 
-document.addEventListener("click", (e) => {
-  const a = e.target.closest("[data-open]");
-  if (a) { e.preventDefault(); openDetail(a.dataset.open); return; }
-  // A normal link inside the dialog navigates away: close the dialog first
-  if (e.target.closest("#detail a[href^='#']") && $("#detail").open) $("#detail").close();
-});
-$("#detail-close").addEventListener("click", () => $("#detail").close());
-$("#detail").addEventListener("close", () => {
-  delete $("#detail").dataset.ref;
-  // Only touch the URL if it still points at the dialog (a clicked link may have moved on)
-  const h = parseHash();
-  if (h.params.has("open") && h.view === current.view) setParams({ open: "" });
-});
-$("#detail").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 window.addEventListener("hashchange", route);
 
 /* Theme: "auto" follows the OS setting (the default); light/dark override it.
@@ -1608,7 +1755,7 @@ document.addEventListener("mousemove", (e) => {
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (["overview", "customer", "sales"].includes(current.view) && S.meta) route(); }, 250);
+  resizeTimer = setTimeout(() => { if (["overview", "customer", "manager", "sales", "managers"].includes(current.view) && S.meta) route(); }, 250);
 });
 
 buildFormatters();

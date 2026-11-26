@@ -73,38 +73,80 @@ def find_exports(files, cfg):
     return found, warnings
 
 
+def id_key(value):
+    """Matching key for customer numbers: '0003000048' and '3000048' are the same
+    customer (one export may pad numbers with zeros, the other not)."""
+    v = (value or "").strip()
+    return (v.lstrip("0") or "0") if v.isdigit() else v.casefold()
+
+
+def name_key(value):
+    """Matching key for person names: case and extra spaces don't matter."""
+    return " ".join((value or "").split()).casefold()
+
+
 def build(files, cfg):
-    """Parse, filter, link and validate. Returns (data, meta_sources, warnings)."""
+    """Parse, filter, link and validate. Returns (data, meta_sources, warnings).
+
+    Matching rules (each one also counted in meta, so nothing disappears silently):
+    - blocked customers ("zárolt" marker) are dropped, with all their invoices
+    - customer numbers match regardless of leading zeros
+    - Ügyintéző names that differ only in case/spacing are one person
+      (shown with the most frequent spelling)
+    - an invoice repeated on identical rows is counted once
+    - credit notes (configured invoice types) count negative
+    """
     found, warnings = find_exports(files, cfg)
     if "vevok" not in found:
         raise ValueError("no customer export found (needs the 'felismeres' columns of [vevok])")
 
-    # Customers: drop blocked ones (marker in name or search term), skip bad rows
+    # ---- Customers ----
     rows, w = datasets.parse(found["vevok"], "vevok", cfg)
     warnings += w
-    customers, seen, blocked = [], set(), set()
+    cname = found["vevok"].name
+    customers, by_id, blocked = [], {}, set()
     markers = cfg["blocked_markers"]
     for r in rows:
         line = r.pop("_line")
         if not r.get("id"):
-            warnings.append(f"{found['vevok'].name} line {line}: no customer number, row skipped")
+            warnings.append(f"{cname} line {line}: no customer number, row skipped")
             continue
         text = datasets.fold(f"{r.get('name') or ''} {r.get('search_term') or ''}")
         if any(m in text for m in markers):
-            blocked.add(r["id"])
+            blocked.add(id_key(r["id"]))
             continue
-        if r["id"] in seen:
-            warnings.append(f"{found['vevok'].name} line {line}: duplicate customer {r['id']}, row skipped")
+        if id_key(r["id"]) in by_id:
+            warnings.append(f"{cname} line {line}: duplicate customer {r['id']}, row skipped")
             continue
-        seen.add(r["id"])
+        by_id[id_key(r["id"])] = r
         if not r.get("name"):
             warnings.append(f"Customer {r['id']}: no name")
         customers.append(r)
-    data = {"customers": customers}
-    sources = {"customers": {"file": found["vevok"].name, "exported_at": stamp(found["vevok"]),
-                             "rows": len(customers), "skipped_blocked": len(blocked)}}
 
-    # Invoices: linked to customers by customer number
+    # One spelling per Ügyintéző: the most frequent one among the variants
+    spellings = {}
+    for c in customers:
+        if c.get("account_manager"):
+            c["account_manager"] = " ".join(c["account_manager"].split())
+            variants = spellings.setdefault(name_key(c["account_manager"]), {})
+            variants[c["account_manager"]] = variants.get(c["account_manager"], 0) + 1
+    merged_names = {}
+    for variants in spellings.values():
+        best = max(variants.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        for v in variants:
+            if v != best:
+                merged_names[v] = best
+    for c in customers:
+        if c.get("account_manager") in merged_names:
+            c["account_manager"] = merged_names[c["account_manager"]]
+    for v, best in sorted(merged_names.items()):
+        warnings.append(f"Ügyintéző '{v}' treated as '{best}' (same name, different spelling)")
+
+    data = {"customers": customers}
+    sources = {"customers": {"file": cname, "exported_at": stamp(found["vevok"]), "rows": len(customers),
+                             "skipped_blocked": len(blocked), "managers": len(spellings)}}
+
+    # ---- Invoices: linked to customers by customer number ----
     if "szamlak" in found:
         rows, w = datasets.parse(found["szamlak"], "szamlak", cfg)
         warnings += w
@@ -113,12 +155,12 @@ def build(files, cfg):
         # Invoice types counted as negative (credit notes), compared without case/accents
         negative = {datasets.fold(k) for k in section.get("negativ_tipusok", ["Jóváírás"])}
         invoices, by_key, of_blocked, orphans, merged = [], {}, 0, {}, 0
-        kinds, cancelled = {}, 0
-        customer_ids = {c["id"] for c in customers}
+        kinds, cancelled, raw_rows, skipped = {}, 0, len(rows), 0
         for r in rows:
             line = r.pop("_line")
             if not r.get("id") or not r.get("customer_id"):
                 warnings.append(f"{name} line {line}: no invoice or customer number, row skipped")
+                skipped += 1
                 continue
             # One invoice can appear on several identical rows (a side effect of the
             # export). The internal document ID identifies it; without it, the number.
@@ -128,11 +170,17 @@ def build(files, cfg):
                     merged += 1
                 else:
                     warnings.append(f"{name} line {line}: invoice {r['id']} appears again with different values, row skipped")
+                    skipped += 1
                 continue
             by_key[key] = dict(r)
-            if r["customer_id"] in blocked:
+            if id_key(r["customer_id"]) in blocked:
                 of_blocked += 1
                 continue
+            customer = by_id.get(id_key(r["customer_id"]))
+            if customer:
+                r["customer_id"] = customer["id"]  # the customer export's spelling of the number
+            else:
+                orphans[r["customer_id"]] = orphans.get(r["customer_id"], 0) + 1
             kind = r.get("kind") or ""
             kinds[kind] = kinds.get(kind, 0) + 1
             if datasets.fold(kind) in negative:
@@ -142,8 +190,6 @@ def build(files, cfg):
                 r["credit"] = True
             if (r.get("cancelled") or "").strip().lower() in ("igen", "i", "yes", "x"):
                 cancelled += 1
-            if r["customer_id"] not in customer_ids:
-                orphans[r["customer_id"]] = orphans.get(r["customer_id"], 0) + 1
             # Keep the page's data small: drop what was only needed here
             for f in ("doc_id", "kind", "cancelled", "origin"):
                 r.pop(f, None)
@@ -156,10 +202,30 @@ def build(files, cfg):
             warnings.append(f"Invoices for unknown customer {cid}: {n} (not in the customer export)")
         data["invoices"] = invoices
         sources["invoices"] = {"file": name, "exported_at": stamp(found["szamlak"]), "rows": len(invoices),
-                               "skipped_blocked": of_blocked, "duplicates_merged": merged,
-                               "kinds": kinds, "cancelled_flagged": cancelled,
+                               "raw_rows": raw_rows, "skipped_rows": skipped, "skipped_blocked": of_blocked, "duplicates_merged": merged,
+                               "unmatched": sum(orphans.values()), "kinds": kinds, "cancelled_flagged": cancelled,
                                "has_payments": "cleared" in section.get("oszlopok", {})}
     return data, sources, warnings
+
+
+def control_totals(data):
+    """Figures the page recomputes on its own and compares (⚠ status tab).
+    Only invoices linked to a known customer and with a date count, as on the
+    page. Amounts in integer cents, summed exactly with Decimal."""
+    from decimal import Decimal
+    ids = {c["id"] for c in data["customers"]}
+    out = {"customers": len(data["customers"])}
+    if "invoices" in data:
+        net, count = {}, {}
+        for i in data["invoices"]:
+            if i["customer_id"] not in ids or not i.get("date"):
+                continue
+            cur = i.get("currency") or i.get("currency_code") or ""
+            net[cur] = net.get(cur, 0) + int((Decimal(str(i["net"] or 0)) * 100).to_integral_value())
+            count[cur] = count.get(cur, 0) + 1
+        out["invoices_by_currency"] = count
+        out["net_cents_by_currency"] = net
+    return out
 
 
 def compact(data):
@@ -203,6 +269,7 @@ def run_import(files):
         "exported_at": sources["customers"]["exported_at"],
         "fake": fake,
         "sources": sources,
+        "checks": control_totals(data),
         "warnings": warnings[:500],
         "warning_count": len(warnings),
     }

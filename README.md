@@ -75,6 +75,7 @@ the raw code without warnings.
 | Top bar | Search by customer number or name (suggestions; Enter opens the customer), data date, MINTA tag |
 | Áttekintés | With invoices: sales this year and last month (vs the previous year), active customers, new customers, customers without Ügyintéző; monthly sales vs the previous year; top customers; sales by Ügyintéző, industry and region (net, HUF invoices); sales per currency; new customers per month and the latest ones. Without invoices: the customer statistics |
 | Vevők | All customers (default columns: name, industry, Ügyintéző, tax no., currency, payment terms, sales this year, country, region, city) with filters and CSV export |
+| Ügyintéző page | Like the customer page: sales this year and last month vs the previous year, active and new customers, sales chart (year/half/quarter/month), their customers with sales and change, sales per currency and industry, latest new customers |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
 | Értékesítés (Sales) | Button groups for range, time breakdown and net/gross; one large button per currency showing its total (currencies are never added). Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
 | ⚠ tab (right end of the tab bar) | Import status: warnings from the last import (searchable), stale-data alert, data sources with row counts, skipped blocked customers. The icon is grey when all is well, amber with a count when there are warnings, red when the export is overdue |
@@ -110,6 +111,24 @@ One row = one invoice header. Columns used (see `[szamlak]` in `config/oszlopok.
 - Invoices of blocked or unknown customers are skipped and reported.
 - Invoice lines / articles (later): add a `szamlatetelek` entry to `FIELDS` in
   `importer/datasets.py` and a matching section in `oszlopok.toml`.
+
+## How the numbers are verified
+
+1. **Automated tests** for the importer (parsing, matching, duplicates, credit notes,
+   blocked customers, exact totals, row accounting):
+   ```bash
+   docker compose run --rm importer python -m unittest -v
+   ```
+2. **Control totals.** The importer writes the invoice count and the net sum per currency
+   (exact, in cents) to `meta.json`. The page recomputes them on its own: from the
+   invoices, via the customers, via the Ügyintézők and period by period (every invoice in
+   exactly one week/month/quarter/half/year), and checks that every invoice row is
+   accounted for (invoices + invalid + blocked customers' + duplicates = rows in the file).
+   The results are on the ⚠ status tab ("Ellenőrzések"); any mismatch turns the icon red.
+3. **Matching rules:** customer numbers match regardless of leading zeros
+   (`0003000048` = `3000048`); Ügyintéző names that differ only in case or spacing are one
+   person (reported as a warning); sales per Ügyintéző use the customer's *current*
+   Ügyintéző, so a customer's whole history moves with it if the Ügyintéző changes.
 
 ## Data quality and precision
 
