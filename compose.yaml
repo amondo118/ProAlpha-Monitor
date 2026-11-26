@@ -3,7 +3,7 @@
 #                            (compose.override.yaml is merged in automatically)
 #   Production (AlmaLinux):  docker compose -f compose.yaml -f compose.prod.yaml up -d --build
 
-name: sap-dashboard
+name: proalpha-monitor
 
 services:
   web:

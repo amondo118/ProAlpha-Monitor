@@ -1,4 +1,4 @@
-/* Customer dashboard: plain JavaScript, no build step, no external libraries.
+/* ProAlpha Monitor: plain JavaScript, no build step, no external libraries.
  *
  * Loads data/data.json and data/meta.json, written by the importer from the
  * daily SAP exports:

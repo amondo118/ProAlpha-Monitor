@@ -1,6 +1,6 @@
-# Vevői irányítópult (Customer Dashboard)
+# ProAlpha Monitor
 
-Read-only dashboard for the daily SAP exports: customers now, invoices next,
+Read-only customer dashboard (vevői irányítópult) for the daily SAP exports: customers now, invoices next,
 invoice lines (articles) later. Hungarian by default, English via the language
 switch. Everything runs in Docker; the host needs only Docker and Git.
 
