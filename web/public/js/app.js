@@ -244,7 +244,7 @@ function customerStats(c) {
 
 /* ---------- routing & URL state ---------- */
 
-const VIEWS = ["overview", "sales", "managers", "customers", "customer", "manager", "status"];
+const VIEWS = ["overview", "sales", "managers", "customers", "customer", "manager", "status", "help"];
 const TABS = ["overview", "sales", "customers", "managers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
@@ -264,16 +264,23 @@ function setParams(updates) {
   history.replaceState(null, "", `#${current.view}${qs ? "?" + qs : ""}`);
 }
 
+let lastRoute = "";
 function route() {
   if (!S.meta) return;
   current = parseHash();
   renderTabs();
+  // Browser tab title: the open part of the site (customer and Ügyintéző pages set their own name)
+  document.title = current.view === "overview" ? t("app.title") : `${t("nav." + current.view)} – ${t("app.title")}`;
   const main = $("#view");
   main.innerHTML = "";
   viewUpdate = null;
   ({ overview: renderOverview, sales: renderSales, managers: renderManagers, customers: renderCustomers,
-    customer: renderCustomer, manager: renderManager, status: renderStatus })[current.view](main);
-  if (current.view === "customer" || current.view === "manager") window.scrollTo(0, 0);
+    customer: renderCustomer, manager: renderManager, status: renderStatus, help: renderHelp })[current.view](main);
+  // a new page starts at the top; re-rendering the same page (language, resize) keeps the position
+  const where = `${current.view}?${current.params.get("id") || ""}`;
+  if (where !== lastRoute) window.scrollTo(0, 0);
+  lastRoute = where;
+  showWelcome();
 }
 
 const customerHref = (id) => `#customer?id=${encodeURIComponent(id)}`;
@@ -282,7 +289,6 @@ const customerHref = (id) => `#customer?id=${encodeURIComponent(id)}`;
 
 function applyStaticText() {
   document.documentElement.lang = LANG;
-  document.title = t("app.title");
   document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
   $("#lang").value = LANG;
   $("#theme").value = document.documentElement.dataset.theme || "auto";
@@ -300,15 +306,22 @@ const WARN_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="
   stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.6" stroke="currentColor" stroke-width="2"
   stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.2" fill="currentColor"/></svg>`;
 
+const HELP_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2" fill="none"
+  stroke="currentColor" stroke-width="2"/><path d="M9.4 9.3a2.7 2.7 0 1 1 3.9 2.4c-.8.4-1.3 1-1.3 1.9v.6" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.3" r="1.2" fill="currentColor"/></svg>`;
+
 function renderTabs() {
   const active = current.view === "customer" ? "customers" : current.view === "manager" ? "managers" : current.view;
   const st = importStatus();
   const label = st.failed ? t("chk.failed", { n: st.failed }) : st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: st.count }) : t("status.ok");
   $("#tabs").innerHTML = TABS.map((v) =>
     `<a href="#${v}"${v === active ? ' aria-current="page"' : ""}>${esc(t("nav." + v))}</a>`).join("") +
-    `<a href="#status" class="tab-icon${st.stale ? " bad" : st.count ? " warn" : ""}"${active === "status" ? ' aria-current="page"' : ""}
-      title="${esc(`${t("nav.status")}: ${label}`)}" aria-label="${esc(`${t("nav.status")}: ${label}`)}">${WARN_ICON}${
-      st.count || st.stale ? `<span class="count">${st.stale && !st.count ? "!" : esc(F.num(st.count))}</span>` : ""}</a>`;
+    `<span class="tab-icons">
+      <a href="#status" class="tab-icon${st.stale ? " bad" : st.count ? " warn" : ""}"${active === "status" ? ' aria-current="page"' : ""}
+        title="${esc(`${t("nav.status")}: ${label}`)}" aria-label="${esc(`${t("nav.status")}: ${label}`)}">${WARN_ICON}${
+        st.count || st.stale ? `<span class="count">${st.stale && !st.count ? "!" : esc(F.num(st.count))}</span>` : ""}</a>
+      <a href="#help" class="tab-icon"${active === "help" ? ' aria-current="page"' : ""} title="${esc(t("nav.help"))}" aria-label="${esc(t("nav.help"))}">${HELP_ICON}</a>
+    </span>`;
 }
 
 /* Self-check: the page recomputes the importer's control totals in several
@@ -1455,12 +1468,20 @@ function renderSales(main) {
         <button type="button" data-act="export">${esc(t("f.export"))}</button>
       </div>
     </section>
-    <div class="results" style="display:contents"></div>
+    <div class="results sales-results"></div>
   </div>`;
   const view = main.firstElementChild, host = $(".results", view), controls = $(".sales-controls", view);
   let state = {};
   const draw = () => {
+    // Redrawing replaces the results; keep the reader where they are (e.g. at the
+    // breakdown buttons). The results area never shrinks while on this tab, so a
+    // shorter table (e.g. "Ország") can't pull the page up under the mouse.
+    const y = window.scrollY;
+    const tallest = Math.max(parseFloat(host.dataset.tallest || 0), host.scrollHeight);
+    host.dataset.tallest = tallest;
+    host.style.minHeight = `${tallest}px`;
     state = drawSales(host, currencies);
+    window.scrollTo(0, y);
     // reflect the effective choices (defaults, custom dates) on the buttons
     controls.querySelectorAll('.seg[data-param="r"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.preset));
     controls.querySelectorAll('.seg[data-param="g"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.g));
@@ -1660,6 +1681,51 @@ function renderStatus(main) {
     const q = e.target.value.toLowerCase();
     document.querySelectorAll("#warn-list li").forEach((li) => { li.hidden = q && !li.textContent.toLowerCase().includes(q); });
   });
+}
+
+/* ---------- help ---------- */
+
+function renderHelp(main) {
+  const sections = HELP[LANG] || HELP.hu;
+  main.innerHTML = `
+    <section class="card help-intro">
+      <h1>${esc(t("help.title"))}</h1>
+      <p>${t("help.intro")}</p>
+    </section>
+    <div class="grid-2 help">${sections.map((sec) => `<section class="card">
+      <div class="card-head"><h2>${esc(sec.title)}</h2></div>
+      <ul>${sec.items.map((item) => `<li>${item}</li>`).join("")}</ul>
+    </section>`).join("")}</div>`;
+}
+
+/* First visit: a short welcome in the corner, pointing to the help tab.
+   Hides itself after a while (not while the mouse or keyboard focus is on it). */
+function showWelcome() {
+  if (showWelcome.done) return;
+  showWelcome.done = true;
+  try { if (localStorage.getItem("welcomed")) return; localStorage.setItem("welcomed", "1"); } catch { /* shown, not remembered */ }
+  if (current.view === "help") return;
+  const box = document.createElement("div");
+  box.className = "toast";
+  box.setAttribute("role", "status");
+  box.innerHTML = `<button type="button" class="toast-close" aria-label="${esc(t("welcome.close"))}">✕</button>
+    <div class="toast-title">${esc(t("welcome.title"))}</div>
+    <p>${esc(t("welcome.text"))}</p>
+    <a href="#help" class="toast-link">${HELP_ICON}<span>${esc(t("welcome.open"))}</span></a>
+    <span class="toast-timer"></span>`;
+  document.body.append(box);
+  let left = 12000, last = Date.now(), timer;
+  const hide = () => { clearInterval(timer); box.classList.add("toast-out"); setTimeout(() => box.remove(), 300); };
+  const paused = () => box.matches(":hover") || box.contains(document.activeElement);
+  timer = setInterval(() => {
+    const now = Date.now();
+    if (!paused()) left -= now - last;
+    last = now;
+    box.style.setProperty("--left", Math.max(0, left / 12000));
+    if (left <= 0) hide();
+  }, 100);
+  box.querySelector(".toast-close").addEventListener("click", hide);
+  box.querySelector(".toast-link").addEventListener("click", hide);
 }
 
 /* ---------- global search (top bar) ---------- */

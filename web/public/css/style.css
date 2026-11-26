@@ -124,7 +124,8 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .tabs a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
 .tabbar { background: var(--surface); border-bottom: 1px solid var(--border); }
 /* status tab: icon only, right end of the tab bar (below the language switch) */
-.tabs a.tab-icon { margin-left: auto; margin-right: 0; padding: 8px 4px; display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+.tab-icons { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.tabs a.tab-icon { margin-left: 0; margin-right: 0; padding: 8px 4px; display: flex; align-items: center; gap: 6px; color: var(--text-3); }
 .tabs a.tab-icon svg { display: block; }
 .tabs a.tab-icon.warn { color: var(--pill-warn); }
 .tabs a.tab-icon.bad { color: var(--pill-bad); }
@@ -324,3 +325,29 @@ dialog .table-wrap { max-height: 50vh; }
   .filters input[type=search] { width: 100%; }
   .hbars .name { max-width: 140px; }
 }
+
+/* help page */
+.help-intro h1 { font-size: 26px; margin-bottom: 6px; }
+.help-intro p { margin: 0; color: var(--text-2); max-width: 760px; }
+.help ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.help li { line-height: 1.5; }
+kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface-2); }
+.help code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+/* first-visit welcome message (bottom right) */
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; width: min(340px, calc(100vw - 32px)); padding: 16px 18px 18px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgb(0 0 0 / .18);
+  overflow: hidden; animation: toast-in .3s ease-out; }
+.toast-out { opacity: 0; transform: translateY(8px); transition: opacity .3s, transform .3s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px); } }
+.toast-title { font-family: var(--font-display); font-weight: 700; font-size: 17px; padding-right: 28px; }
+.toast p { margin: 6px 0 12px; color: var(--text-2); font-size: 13px; }
+.toast-close { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; padding: 0; display: grid; place-items: center;
+  background: transparent; color: var(--text-3); border: 0; border-radius: 6px; font-weight: 400; }
+.toast-close:hover { background: var(--surface-2); color: var(--text); }
+.toast-link { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.toast-timer { position: absolute; left: 0; bottom: 0; height: 3px; width: calc(var(--left, 1) * 100%); background: var(--accent); transition: width .1s linear; }
+@media (prefers-reduced-motion: reduce) { .toast, .toast-out { animation: none; transition: none; } }
+
+/* sales results: a block with the same spacing as the page grid (it keeps a minimum height) */
+.sales-results { display: grid; gap: 20px; align-content: start; }
