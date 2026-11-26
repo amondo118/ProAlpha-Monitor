@@ -99,12 +99,12 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 
 /* ---------- top bar ---------- */
 .topbar { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
-.topbar .wrap { display: flex; align-items: center; gap: 16px 24px; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+.topbar .wrap { display: flex; align-items: center; gap: 12px 16px; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--font-display); font-size: 18px; font-weight: 700; white-space: nowrap; }
 .brand:hover { text-decoration: none; }
 .logo { width: 22px; height: 22px; border: 2px solid var(--accent); border-radius: 5px; display: grid; place-items: center; }
 .logo::after { content: ""; width: 8px; height: 8px; background: var(--accent); border-radius: 2px; }
-.search { position: relative; display: flex; gap: 8px; flex: 1 1 380px; max-width: 520px; margin: 0 auto; }
+.search { position: relative; display: flex; gap: 8px; flex: 1 1 260px; max-width: 440px; margin: 0 auto; }
 .search input { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; }
 .suggest { position: absolute; top: calc(100% + 4px); left: 0; right: 0; margin: 0; padding: 4px; list-style: none; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / .12); z-index: 20; max-height: 360px; overflow: auto; }
@@ -113,6 +113,12 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .suggest .sid { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); min-width: 64px; }
 .suggest .sname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest .scity { color: var(--text-3); font-size: 12px; }
+.period-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0 4px 0 10px; background: var(--surface); }
+.period-pick:hover { border-color: var(--accent); }
+.period-pick select { border: 0; background: transparent; padding: 8px 6px; font-weight: 600; color: var(--text); width: 190px; text-overflow: ellipsis; cursor: pointer; }
+.period-pick select:focus-visible { outline: none; }
+.period-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; color: var(--text-2); font-size: 13px; margin-left: auto; flex-wrap: wrap; }
 .tag { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   background: var(--tag-bg); color: var(--tag-text); padding: 3px 8px; border-radius: 6px; }
@@ -352,3 +358,17 @@ kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--bo
 
 /* sales results: a block with the same spacing as the page grid (it keeps a minimum height) */
 .sales-results { display: grid; gap: 20px; align-content: start; }
+
+/* settings page */
+.set-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.set-label { font-weight: 600; }
+.set-hint { font-size: 12px; }
+.set-row select { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--surface); }
+.set-row input[type=number] { width: 80px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--surface); }
+.set-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.set-form input { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; background: var(--surface); }
+.set-form input[name=name] { flex: 1 1 180px; }
+.set-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.link-btn.danger { color: var(--critical); }
+.range-info { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.range-dates { font-size: 13px; }

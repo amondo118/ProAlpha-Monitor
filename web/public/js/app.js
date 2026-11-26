@@ -44,13 +44,75 @@ const NOW = new Date();
 const TODAY = isoDate(NOW);
 const YEAR = NOW.getFullYear();
 const daysAgo = (n) => isoDate(new Date(YEAR, NOW.getMonth(), NOW.getDate() - n));
-const PERIOD = {
-  new: daysAgo(CONFIG.newDays - 1),
-  prevNew: daysAgo(CONFIG.newDays * 2 - 1),
-  ytd: `${YEAR}-01-01`,
-  prevYtd: `${YEAR - 1}-01-01`,
-  prevYtdEnd: `${YEAR - 1}${TODAY.slice(4)}`,
-};
+/* ---------- settings (per browser) ---------- */
+const loadJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+const saveJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* not remembered */ } };
+const SETTINGS_DEFAULT = { newDays: 30, amount: "net" };
+let SETTINGS = { ...SETTINGS_DEFAULT, ...loadJson("settings", {}) };
+let CUSTOM_PERIODS = loadJson("customPeriods", []);   // [{id, name, from, to}]
+
+// "New customer" window (days), from the settings
+const PERIOD = {};
+function applyNewDays() {
+  CONFIG.newDays = Math.max(1, Math.round(+SETTINGS.newDays || 30));
+  PERIOD.new = daysAgo(CONFIG.newDays - 1);
+  PERIOD.prevNew = daysAgo(CONFIG.newDays * 2 - 1);
+}
+applyNewDays();
+
+/* ---------- the viewed period (top bar) ----------
+   Every "this period" figure on the site uses P: sales, active customers, new
+   customers, offers… and compares with P.prevFrom–P.prevTo: the same period one
+   year earlier, or for periods longer than a year the equally long period
+   before it (so the two never overlap). */
+const PERIOD_KEYS = ["ytd", "12m", "q", "pq", "h", "ph", "ly", "2y", "3y", "all"];
+let P = null;
+const inCur = (d) => !!d && d >= P.from && d <= P.to;
+const inPrev = (d) => !!d && !!P.prevFrom && d >= P.prevFrom && d <= P.prevTo;
+
+function periodRange(key) {
+  const y = YEAR, m = NOW.getMonth(), q = Math.floor(m / 3), h = m < 6 ? 0 : 1;
+  const D = (Y, M, d) => isoDate(new Date(Y, M, d));
+  if (key === "12m") return { from: D(y, m - 11, 1), to: TODAY };
+  if (key === "q") return { from: D(y, q * 3, 1), to: TODAY };
+  if (key === "pq") return { from: D(y, q * 3 - 3, 1), to: D(y, q * 3, 0) };
+  if (key === "h") return { from: D(y, h * 6, 1), to: TODAY };
+  if (key === "ph") return { from: D(y, h * 6 - 6, 1), to: D(y, h * 6, 0) };
+  if (key === "ly") return { from: D(y - 1, 0, 1), to: D(y - 1, 11, 31) };
+  if (key === "2y") return { from: D(y - 1, 0, 1), to: TODAY };
+  if (key === "3y") return { from: D(y - 2, 0, 1), to: TODAY };
+  if (key === "all") return { from: S.firstDate || D(y, 0, 1), to: TODAY };
+  if (key === "ytd") return { from: D(y, 0, 1), to: TODAY };
+  const c = CUSTOM_PERIODS.find((x) => `c:${x.id}` === key);
+  return c ? { from: c.from, to: c.to, name: c.name } : null;
+}
+function buildPeriod(key) {
+  let r = periodRange(key);
+  if (!r) { key = "ytd"; r = periodRange(key); }
+  const span = daysBetween(r.from, r.to) + 1;
+  const shift = key === "all" ? 0 : Math.max(1, Math.ceil(span / 366));
+  return { key, from: r.from, to: r.to, shift,
+    prevFrom: shift ? shiftIsoYear(r.from, -shift) : null, prevTo: shift ? shiftIsoYear(r.to, -shift) : null,
+    short: periodShort(key, r), name: r.name };
+}
+/* Short name, used in headings: "idei év", "2026. IV. negyedév", "2025", custom name… */
+function periodShort(key, r) {
+  if (r.name) return r.name;
+  const y = +r.from.slice(0, 4), q = Math.floor((+r.from.slice(5, 7) - 1) / 3) + 1, h = +r.from.slice(5, 7) <= 6 ? 1 : 2;
+  const roman = (n) => (LANG === "hu" ? ["I", "II", "III", "IV"][n - 1] : n);
+  if (key === "q" || key === "pq") return t("period.quarter", { y, n: roman(q) });
+  if (key === "h" || key === "ph") return t("period.half", { y, n: roman(h) });
+  if (key === "ly") return String(y);
+  if (key === "2y" || key === "3y") return `${y}–${YEAR}`;
+  return t("per.short." + key);
+}
+function periodOptionLabel(key) {
+  const r = periodRange(key);
+  if (!r) return key;
+  if (r.name) return `${r.name} (${F.date(r.from)} – ${F.date(r.to)})`;
+  return t("per." + key, { s: periodShort(key, r) });
+}
+const periodKeySaved = () => { try { return localStorage.getItem("period") || "ytd"; } catch { return "ytd"; } };
 
 /* ---------- formatting (rebuilt when the language changes) ---------- */
 
@@ -122,9 +184,11 @@ async function load() {
   try {
     const [meta, data] = await Promise.all([fetchJson("data/meta.json"), fetchJson("data/data.json")]);
     S.meta = meta;
+    S.data = data;   // kept: a new period or setting re-indexes it
     index(data);
     S.checks = null; // recomputed for the new data
     renderChrome();
+    renderPeriodSelect();
     route();
   } catch (e) {
     console.error(e);
@@ -183,6 +247,10 @@ function index(data) {
     S.invoices.push(x);
   }
   for (const c of S.customers) c.invoices.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id, undefined, { numeric: true }));
+  // The viewed period ("all" starts at the earliest invoice), before any statistics
+  S.firstDate = S.invoices.reduce((a, i) => (i.date && (!a || i.date < a) ? i.date : a), null)
+    || S.customers.reduce((a, c) => (c.created && (!a || c.created < a) ? c.created : a), null);
+  P = buildPeriod(periodKeySaved());
   for (const c of S.customers) c.st = customerStats(c);
 
   S.managers = new Map();
@@ -193,7 +261,7 @@ function index(data) {
     m.customers.push(c);
     m.count++;
     if (c.isNew) m.new30++;
-    if (c.created && c.created >= PERIOD.ytd) m.newYtd++;
+    if (inCur(c.created)) m.newYtd++;
     if (c.country && c.country !== CONFIG.homeCountry) m.foreign++;
     if (c.created && (!m.last || c.created > m.last)) m.last = c.created;
     for (const [cur, v] of c.st.ytd) addTo(m.ytd, cur, v);
@@ -225,8 +293,8 @@ function index(data) {
     S.offers.push(x);
     const m = S.managers.get(key);
     m.offers.push(x);
-    if (x.date >= PERIOD.ytd) { m.offersYtd++; m.offerCustomers.add(c); }
-    else if (x.date >= PERIOD.prevYtd && x.date <= PERIOD.prevYtdEnd) m.offersPrev++;
+    if (inCur(x.date)) { m.offersYtd++; m.offerCustomers.add(c); }
+    else if (inPrev(x.date)) m.offersPrev++;
   }
   for (const m of S.managers.values()) m.offers.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id, undefined, { numeric: true }));
   for (const m of S.managers.values()) m._s = pmName(m.key).toLowerCase();
@@ -249,16 +317,16 @@ function customerStats(c) {
     addTo(st.total, i.cur, v);
     st.count++;
     if (i.date && (!st.firstDate || i.date < st.firstDate)) st.firstDate = i.date;
-    if (i.date >= PERIOD.ytd) { if (i.credit) st.ytdCredits++; else st.ytdCount++; }
-    if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) st.prevCount++;
+    if (inCur(i.date)) { if (i.credit) st.ytdCredits++; else st.ytdCount++; }
+    if (inPrev(i.date)) st.prevCount++;
     if (i.date) {
       const y = +i.date.slice(0, 4);
       if (!st.byYear.has(y)) st.byYear.set(y, new Map());
       addTo(st.byYear.get(y), i.cur, v);
       st.firstYear = Math.min(st.firstYear ?? y, y);
       st.lastYear = Math.max(st.lastYear ?? y, y);
-      if (i.date >= PERIOD.ytd) addTo(st.ytd, i.cur, v);
-      if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) addTo(st.prev, i.cur, v);
+      if (inCur(i.date)) addTo(st.ytd, i.cur, v);
+      if (inPrev(i.date)) addTo(st.prev, i.cur, v);
     }
     if (i.open) {
       addTo(st.open, i.cur, v);
@@ -275,7 +343,7 @@ function customerStats(c) {
 
 /* ---------- routing & URL state ---------- */
 
-const VIEWS = ["overview", "sales", "managers", "customers", "customer", "manager", "status", "help"];
+const VIEWS = ["overview", "sales", "managers", "customers", "customer", "manager", "status", "help", "settings"];
 const TABS = ["overview", "sales", "customers", "managers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
@@ -306,7 +374,7 @@ function route() {
   main.innerHTML = "";
   viewUpdate = null;
   ({ overview: renderOverview, sales: renderSales, managers: renderManagers, customers: renderCustomers,
-    customer: renderCustomer, manager: renderManager, status: renderStatus, help: renderHelp })[current.view](main);
+    customer: renderCustomer, manager: renderManager, status: renderStatus, help: renderHelp, settings: renderSettings })[current.view](main);
   // a new page starts at the top; re-rendering the same page (language, resize) keeps the position
   const where = `${current.view}?${current.params.get("id") || ""}`;
   if (where !== lastRoute) window.scrollTo(0, 0);
@@ -321,9 +389,6 @@ const customerHref = (id) => `#customer?id=${encodeURIComponent(id)}`;
 function applyStaticText() {
   document.documentElement.lang = LANG;
   document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
-  $("#lang").value = LANG;
-  $("#theme").value = document.documentElement.dataset.theme || "auto";
-  $("#theme").setAttribute("aria-label", t("theme"));
   $("#global-q").placeholder = t("search.placeholder", { id: S.customers[0]?.id ?? "3000095" });
 }
 
@@ -341,6 +406,10 @@ const HELP_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="
   stroke="currentColor" stroke-width="2"/><path d="M9.4 9.3a2.7 2.7 0 1 1 3.9 2.4c-.8.4-1.3 1-1.3 1.9v.6" fill="none" stroke="currentColor"
   stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.3" r="1.2" fill="currentColor"/></svg>`;
 
+const GEAR_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor"
+  stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M21.2 12h-2.6M5.4 12H2.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8M18.5 18.5l-1.8-1.8M7.3 7.3 5.5 5.5"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="6.4" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+
 function renderTabs() {
   const active = current.view === "customer" ? "customers" : current.view === "manager" ? "managers" : current.view;
   const st = importStatus();
@@ -352,6 +421,7 @@ function renderTabs() {
         title="${esc(`${t("nav.status")}: ${label}`)}" aria-label="${esc(`${t("nav.status")}: ${label}`)}">${WARN_ICON}${
         st.count || st.stale ? `<span class="count">${st.stale && !st.count ? "!" : esc(F.num(st.count))}</span>` : ""}</a>
       <a href="#help" class="tab-icon"${active === "help" ? ' aria-current="page"' : ""} title="${esc(t("nav.help"))}" aria-label="${esc(t("nav.help"))}">${HELP_ICON}</a>
+      <a href="#settings" class="tab-icon"${active === "settings" ? ' aria-current="page"' : ""} title="${esc(t("nav.settings"))}" aria-label="${esc(t("nav.settings"))}">${GEAR_ICON}</a>
     </span>`;
 }
 
@@ -738,9 +808,8 @@ function renderOverview(main) {
   const between = (c, from, to) => c.created && c.created >= from && c.created <= to;
   const new30 = all.filter((c) => between(c, PERIOD.new, TODAY)).length;
   const prev30 = all.filter((c) => between(c, PERIOD.prevNew, daysAgo(CONFIG.newDays))).length;
-  const newYtd = all.filter((c) => between(c, PERIOD.ytd, TODAY)).length;
-  const prevYtd = all.filter((c) => between(c, PERIOD.prevYtd, PERIOD.prevYtdEnd)).length;
-  const noPm = S.managers.get(NONE)?.count || 0;
+  const newYtd = all.filter((c) => between(c, P.from, P.to)).length;
+  const prevYtd = all.filter((c) => !!P.prevFrom && between(c, P.prevFrom, P.prevTo)).length;
   const foreign = all.filter((c) => c.country && c.country !== CONFIG.homeCountry);
   const pmCount = [...S.managers.keys()].filter((k) => k !== NONE).length;
 
@@ -749,7 +818,7 @@ function renderOverview(main) {
   const deltaHtml = (now, prev, key = "cust.vsPrev") => (prev
     ? `<span class="${now >= prev ? "delta-up" : "delta-down"}">${esc(t(key, { pct: F.signedPct((now - prev) / Math.abs(prev)) }))}</span>` : "");
   const big = (v) => { const p = F.compactParts(v, "HUF"); return `${esc(p.num)}<span class="unit">${esc(p.unit)}</span>`; };
-  const pmItems = [...S.managers.values()].sort((a, b) => b.count - a.count).map((m) => ({
+  const pmItems = [...S.managers.values()].filter((m) => m.key !== NONE).sort((a, b) => b.count - a.count).map((m) => ({
     label: pmLink(m.key), value: m.count,
     tip: `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}\n${t("col.newYtd")}: ${m.newYtd}`,
   }));
@@ -764,8 +833,7 @@ function renderOverview(main) {
       <div id="monthly"></div>
     </section>`;
   const customerTiles = `
-      ${tile(`#customers?from=${PERIOD.new}`, t("kpi.new30"), esc(F.num(new30)), esc(t("kpi.vsPrev30", { n: F.num(prev30) })))}
-      ${tile(`#customers?pm=${NONE}`, t("kpi.noManager"), esc(F.num(noPm)), esc(t("kpi.noManagerSub")))}`;
+      ${tile(`#customers?from=${PERIOD.new}`, t("kpi.new30", { n: CONFIG.newDays }), esc(F.num(new30)), esc(t("kpi.vsPrev30", { n: F.num(prev30), d: CONFIG.newDays })))}`;
 
   if (!S.hasInvoices) {
     // Customer data only: the customer dashboard
@@ -777,7 +845,7 @@ function renderOverview(main) {
       <section class="kpis">
         ${tile("#customers", t("kpi.customers"), esc(F.num(all.length)), esc(t("kpi.customersSub", { n: pmCount })), true)}
         ${customerTiles}
-        ${tile(`#customers?from=${PERIOD.ytd}`, t("kpi.newYtd"), esc(F.num(newYtd)), esc(t("kpi.vsPrevYtd", { n: F.num(prevYtd) })))}
+        ${tile(`#customers?from=${P.from}&to=${P.to}`, t("kpi.newYtd"), esc(F.num(newYtd)), esc(t("kpi.vsPrevYtd", { n: F.num(prevYtd) })))}
         ${tile("#customers?sort=country", t("kpi.foreign"), esc(F.num(foreign.length)), esc(t("kpi.foreignSub", { n: new Set(foreign.map((c) => c.country)).size })))}
       </section>
       ${newChartCard}
@@ -797,72 +865,72 @@ function renderOverview(main) {
   // ---- With invoices: the sales dashboard (net, HUF invoices; other currencies on the Sales tab) ----
   const lmStart = isoDate(new Date(YEAR, NOW.getMonth() - 1, 1));
   const lmKey = periodKey(lmStart, "month"), lmPrevKey = shiftKeyYear(lmKey, -1);
-  const from12 = isoDate(new Date(YEAR, NOW.getMonth() - 11, 1));
-  const keys = periodKeys(from12, TODAY, "month");
+  // sales chart over the viewed period, breakdown by its length, vs the comparison period
+  const g = autoGran(P.from, P.to);
+  const keys = periodKeys(P.from, P.to, g);
   const per = new Map(keys.map((k) => [k, { v: 0, prev: 0 }]));
-  const pFrom = shiftIsoYear(from12, -1), pTo = shiftIsoYear(TODAY, -1);
   let ytd = 0, prevYtdSales = 0, lm = 0, lmPrev = 0;
   const active = new Set(), activePrev = new Set();
   const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), curCount = new Map();
   for (const i of S.invoices) {
     if (!i.date) continue;
-    if (i.date >= PERIOD.ytd) {
+    if (inCur(i.date)) {
       active.add(i.c);
       addTo(byCurrency, i.cur, cents(i.net));
       if (!i.credit) curCount.set(i.cur, (curCount.get(i.cur) || 0) + 1);
-    } else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) activePrev.add(i.c);
+    } else if (inPrev(i.date)) activePrev.add(i.c);
     if (i.cur !== "HUF") continue;
-    const v = cents(i.net), k = periodKey(i.date, "month");
-    if (i.date >= PERIOD.ytd) {
+    const v = cents(i.net), k = periodKey(i.date, g), km = periodKey(i.date, "month");
+    if (inCur(i.date)) {
       ytd += v;
       addTo(byIndustry, i.c.industryLabel || "", v);
       addTo(byRegion, i.c.regionLabel || "", v);
-    } else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) prevYtdSales += v;
-    if (k === lmKey) lm += v;
-    if (k === lmPrevKey) lmPrev += v;
-    if (i.date >= from12 && per.has(k)) per.get(k).v += v;
-    if (i.date >= pFrom && i.date <= pTo) { const row = per.get(shiftKeyYear(k, 1)); if (row) row.prev += v; }
+    } else if (inPrev(i.date)) prevYtdSales += v;
+    if (km === lmKey) lm += v;
+    if (km === lmPrevKey) lmPrev += v;
+    if (inCur(i.date) && per.has(k)) per.get(k).v += v;
+    if (inPrev(i.date)) { const row = per.get(shiftKeyYear(k, P.shift)); if (row) row.prev += v; }
   }
   const money = (v) => compactMoney(v, "HUF");
   const salesItems = (map, param, label) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN).map(([k, v]) => ({
-    label: k ? `<a href="#sales?r=ytd&${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
+    label: k ? `<a href="#sales?${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
     value: v / 100, tip: `${k ? label(k) : t("none")}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}`,
   }));
   const topCustomers = all.map((c) => [c, c.st.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN)
     .map(([c, v]) => ({ label: custLink(c), value: v / 100, tip: `${c.name}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
-  const managerSales = [...S.managers.values()].map((m) => [m, m.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+  const managerSales = [...S.managers.values()].filter((m) => m.key !== NONE).map((m) => [m, m.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
     .map(([m, v]) => ({ label: pmLink(m.key), value: v / 100, tip: `${pmName(m.key)}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
   const lmLabel = F.monthYear(lmKey);
-  const offersYtd = S.offers.filter((o) => o.date >= PERIOD.ytd).length;
-  const offersPrev = S.offers.filter((o) => o.date >= PERIOD.prevYtd && o.date <= PERIOD.prevYtdEnd).length;
-  const offerTop = [...S.managers.values()].filter((m) => m.offersYtd).sort((a, b) => b.offersYtd - a.offersYtd).slice(0, 5)
+  const offersYtd = S.offers.filter((o) => inCur(o.date)).length;
+  const offersPrev = S.offers.filter((o) => inPrev(o.date)).length;
+  const offerTop = [...S.managers.values()].filter((m) => m.offersYtd).sort((a, b) => b.offersYtd - a.offersYtd)
     .map((m) => ({ label: pmLink(m.key), value: m.offersYtd, tip: `${pmName(m.key)}\n${t("off.count", { n: F.num(m.offersYtd) })}\n${t("off.customersN", { n: F.num(m.offerCustomers.size) })}` }));
 
   main.innerHTML = `
     <section class="kpis">
-      ${tile("#sales?r=ytd", t("kpi.salesYtd", { year: YEAR }), big(ytd / 100), deltaHtml(ytd, prevYtdSales), true)}
+      ${tile("#sales", t("kpi.salesYtd", { p: P.short }), big(ytd / 100), deltaHtml(ytd, prevYtdSales), true)}
       ${tile(`#sales?from=${lmStart}&to=${addDays(periodStart(periodKey(TODAY, "month"), "month"), -1)}&g=day`, t("ov.lastMonth", { month: lmLabel }), big(lm / 100), deltaHtml(lm, lmPrev, "ov.vsPrevMonth"))}
-      ${tile("#sales?r=ytd&by=customer", t("ov.active", { year: YEAR }), esc(F.num(active.size)), esc(t("ov.activeSub", { n: F.num(activePrev.size) })))}
-      ${S.hasOffers ? tile("#managers?sort=-offers", t("off.kpi", { year: YEAR }), esc(F.num(offersYtd)), esc(t("off.kpiSub", { n: F.num(offersPrev) }))) : ""}
+      ${tile("#sales?by=customer", t("ov.active", { p: P.short }), esc(F.num(active.size)), esc(t("ov.activeSub", { n: F.num(activePrev.size) })))}
+      ${S.hasOffers ? tile("#managers?sort=-offers", t("off.kpi", { p: P.short }), esc(F.num(offersYtd)), esc(t("off.kpiSub", { n: F.num(offersPrev) }))) : ""}
       ${customerTiles}
     </section>
     <section class="card chart">
-      <div class="card-head"><h2>${esc(t("ov.monthly"))}</h2><a class="sub" href="#sales">${esc(t("ov.details"))}</a></div>
-      <div class="legend"><span><i style="background:var(--bar)"></i>${esc(t("ov.last12"))}</span><span><i style="background:var(--bar-muted)"></i>${esc(t("sales.prevYear"))}</span></div>
+      <div class="card-head"><h2>${esc(t("ov.monthly", { p: P.short, g: t("gran." + g).toLowerCase() }))}</h2><a class="sub" href="#sales">${esc(t("ov.details"))}</a></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>${esc(`${P.short} (${F.date(P.from)} – ${F.date(P.to)})`)}</span>${P.prevFrom ? `<span><i style="background:var(--bar-muted)"></i>${esc(`${t("sales.prevYear")} (${F.date(P.prevFrom)} – ${F.date(P.prevTo)})`)}</span>` : ""}</div>
       <div id="ov-monthly"></div>
       <div class="card-foot">${esc(t("ov.hufNote"))}</div>
     </section>
     <div class="${S.hasOffers ? "grid-3" : "grid-2"}">
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.topCustomers", { year: YEAR }))}</h2><a class="sub" href="#sales?r=ytd&by=customer">${esc(t("ov.all"))}</a></div>${hbars(topCustomers, money)}</section>
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { year: YEAR }))}</h2><a class="sub" href="#sales?r=ytd&by=manager">${esc(t("ov.all"))}</a></div>${hbars(managerSales, money)}</section>
-      ${S.hasOffers ? `<section class="card"><div class="card-head"><h2>${esc(t("off.top5", { year: YEAR }))}</h2><a class="sub" href="#managers?sort=-offers">${esc(t("ov.all"))}</a></div>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.topCustomers", { p: P.short }))}</h2><a class="sub" href="#sales?by=customer">${esc(t("ov.all"))}</a></div>${hbars(topCustomers, money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { p: P.short }))}</h2><a class="sub" href="#sales?by=manager">${esc(t("ov.all"))}</a></div>${hbars(managerSales, money)}</section>
+      ${S.hasOffers ? `<section class="card"><div class="card-head"><h2>${esc(t("off.byManager", { p: P.short }))}</h2><a class="sub" href="#managers?sort=-offers">${esc(t("ov.all"))}</a></div>
         ${hbars(offerTop, (v) => t("off.pcs", { n: F.num(v) }))}<div class="card-foot">${esc(t("off.note"))}</div></section>` : ""}
     </div>
     <div class="grid-3">
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { year: YEAR }))}</h2></div>${hbars(salesItems(byIndustry, "industry", (k) => k), money)}</section>
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { year: YEAR }))}</h2></div>${hbars(salesItems(byRegion, "region", (k) => k), money)}</section>
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { year: YEAR }))}</h2></div>
-        <dl class="rows">${currencyOrder().filter((c) => byCurrency.has(c)).map((c) => `<div><dt><a href="#sales?r=ytd&cur=${encodeURIComponent(c)}"><b>${esc(c)}</b></a>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { p: P.short }))}</h2></div>${hbars(salesItems(byIndustry, "industry", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { p: P.short }))}</h2></div>${hbars(salesItems(byRegion, "region", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { p: P.short }))}</h2></div>
+        <dl class="rows">${currencyOrder().filter((c) => byCurrency.has(c)).map((c) => `<div><dt><a href="#sales?cur=${encodeURIComponent(c)}"><b>${esc(c)}</b></a>
           <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${esc(F.money(byCurrency.get(c) / 100, c))}</dd></div>`).join("")}</dl>
         <div class="card-foot">${esc(t("ov.curNote"))}</div></section>
     </div>
@@ -870,8 +938,8 @@ function renderOverview(main) {
       ${newChartCard}
       ${latestCard}
     </div>`;
-  drawPeriodChart($("#ov-monthly"), { keys, g: "month", values: keys.map((k) => per.get(k).v / 100), prev: keys.map((k) => per.get(k).prev / 100),
-    cur: "HUF", mode: "compare", label: t("ov.monthly") });
+  drawPeriodChart($("#ov-monthly"), { keys, g, values: keys.map((k) => per.get(k).v / 100), prev: P.prevFrom ? keys.map((k) => per.get(k).prev / 100) : null,
+    cur: "HUF", mode: "compare", label: t("ov.monthly"), shift: P.shift });
   drawMonthly($("#monthly"), all);
 }
 
@@ -924,14 +992,14 @@ function managerColumns() {
   ];
   if (S.hasInvoices) {
     cols.push(
-      { key: "active", label: t("mgr.col.active", { year: YEAR }), num: true, value: (m) => m.active },
-      { key: "ytd", label: t("mgr.col.ytd", { year: YEAR }), num: true, value: (m) => hufOf(m.ytd), html: (m) => esc(F.money(hufOf(m.ytd), "HUF")) },
+      { key: "active", label: t("mgr.col.active", { p: P.short }), num: true, value: (m) => m.active },
+      { key: "ytd", label: t("mgr.col.ytd", { p: P.short }), num: true, value: (m) => hufOf(m.ytd), html: (m) => esc(F.money(hufOf(m.ytd), "HUF")) },
       { key: "prev", label: t("mgr.col.prev"), num: true, value: (m) => hufOf(m.prev), html: (m) => `<span class="muted">${esc(F.money(hufOf(m.prev), "HUF"))}</span>` },
       { key: "change", label: t("sales.col.change"), num: true, value: (m) => (hufOf(m.prev) ? (hufOf(m.ytd) - hufOf(m.prev)) / Math.abs(hufOf(m.prev)) : null),
         html: (m) => changeHtml(hufOf(m.ytd), hufOf(m.prev)) },
       { key: "salesShare", label: t("mgr.col.share"), num: true, value: (m) => (totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0),
         html: (m) => esc(F.pct(totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0)) },
-      ...(S.hasOffers ? [{ key: "offers", label: t("off.col", { year: YEAR }), num: true, value: (m) => m.offersYtd,
+      ...(S.hasOffers ? [{ key: "offers", label: t("off.col", { p: P.short }), num: true, value: (m) => m.offersYtd,
         html: (m) => (m.offersYtd ? `<a href="${managerHref(m.key)}" title="${esc(t("off.customersN", { n: F.num(m.offerCustomers.size) }))}">${esc(F.num(m.offersYtd))}</a>` : "0") }] : []),
       { key: "other", label: t("mgr.col.other"), value: (m) => moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))),
         html: (m) => `<span class="muted">${esc(moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))))}</span>` });
@@ -970,17 +1038,17 @@ function renderManagers(main) {
   main.insertAdjacentHTML("afterbegin", `
     <section class="kpis">
       ${tile(t("mgr.kpi.count"), esc(F.num(named.length)), esc(t("mgr.kpi.countSub", { n: F.num(S.customers.length) })), !S.hasInvoices)}
-      ${S.hasInvoices ? tile(t("kpi.salesYtd", { year: YEAR }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
+      ${S.hasInvoices ? tile(t("kpi.salesYtd", { p: P.short }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
       ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
       ${tile(t("mgr.kpi.avg"), esc(F.num(named.length ? Math.round(named.reduce((s, m) => s + m.count, 0) / named.length) : 0)), esc(t("mgr.kpi.avgSub")))}
-      ${S.hasOffers ? tile(t("off.kpi", { year: YEAR }), esc(F.num(managers.reduce((s, m) => s + m.offersYtd, 0))), esc(t("off.kpiSub", { n: F.num(managers.reduce((s, m) => s + m.offersPrev, 0)) }))) : ""}
+      ${S.hasOffers ? tile(t("off.kpi", { p: P.short }), esc(F.num(managers.reduce((s, m) => s + m.offersYtd, 0))), esc(t("off.kpiSub", { n: F.num(managers.reduce((s, m) => s + m.offersPrev, 0)) }))) : ""}
     </section>
     <div class="${S.hasOffers ? "grid-3" : "grid-2"}">
-      ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { year: YEAR }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
+      ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { p: P.short }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
         ${bars(managers, (m) => hufOf(m.ytd), (v) => compactMoney(v, "HUF"), (m) => `${pmName(m.key)}\n${F.money(hufOf(m.ytd), "HUF")}`)}</section>` : ""}
       <section class="card"><div class="card-head"><h2>${esc(t("chart.byManager"))}</h2></div>
         ${bars(managers, (m) => m.count, (v) => F.num(v), (m) => `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}`)}</section>
-      ${S.hasOffers ? `<section class="card"><div class="card-head"><h2>${esc(t("off.byManager", { year: YEAR }))}</h2></div>
+      ${S.hasOffers ? `<section class="card"><div class="card-head"><h2>${esc(t("off.byManager", { p: P.short }))}</h2></div>
         ${bars(managers, (m) => m.offersYtd, (v) => t("off.pcs", { n: F.num(v) }), (m) => `${pmName(m.key)}\n${t("off.count", { n: F.num(m.offersYtd) })}\n${t("off.customersN", { n: F.num(m.offerCustomers.size) })}`)}</section>` : ""}
     </div>`);
 }
@@ -988,10 +1056,10 @@ function renderManagers(main) {
 /* Offers of an Ügyintéző this year: how many, and to whom. The amount is shown
    quietly; offers never count as sales. */
 function offersCard(m) {
-  const list = m.offers.filter((o) => o.date >= PERIOD.ytd);
+  const list = m.offers.filter((o) => inCur(o.date));
   const shown = list.slice(0, 50);
   return `<section class="card" id="offers">
-    <div class="card-head"><h2>${esc(t("off.title", { year: YEAR }))}</h2>
+    <div class="card-head"><h2>${esc(t("off.title", { p: P.short }))}</h2>
       <span class="sub">${esc(t("off.summary", { n: F.num(list.length), c: F.num(m.offerCustomers.size), prev: F.num(m.offersPrev) }))}</span></div>
     ${list.length ? `<div class="table-wrap plain" style="max-height:360px;overflow:auto"><table>
       <thead><tr><th>${esc(t("col.invDate"))}</th><th>${esc(t("off.number"))}</th><th>${esc(t("off.customer"))}</th><th class="num">${esc(t("off.amount"))}</th></tr></thead>
@@ -1027,7 +1095,7 @@ function renderManager(main) {
     const k = periodKey(i.date, "month");
     if (k === lmKey) lm += cents(i.net);
     if (k === lmPrevKey) lmPrev += cents(i.net);
-    if (i.date >= PERIOD.ytd) addTo(byIndustry, i.c.industryLabel || "", cents(i.net));
+    if (inCur(i.date)) addTo(byIndustry, i.c.industryLabel || "", cents(i.net));
   }
   const top = [...m.customers].sort((a, b) => (b.st.ytd.get("HUF") || 0) - (a.st.ytd.get("HUF") || 0))[0];
   const topIndustry = [...byIndustry.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1035,9 +1103,9 @@ function renderManager(main) {
   const chip = (label, value, href) => `<a class="chip" href="${href}"><b>${esc(label)}</b>${esc(value)}</a>`;
 
   const kpis = S.hasInvoices ? [
-    tile(t("kpi.salesYtd", { year: YEAR }), big(hufOf(m.ytd)), deltaText(hufOf(m.ytd), hufOf(m.prev)), true),
+    tile(t("kpi.salesYtd", { p: P.short }), big(hufOf(m.ytd)), deltaText(hufOf(m.ytd), hufOf(m.prev)), true),
     tile(t("ov.lastMonth", { month: F.monthYear(lmKey) }), big(lm / 100), deltaText(lm, lmPrev, "ov.vsPrevMonth")),
-    tile(t("ov.active", { year: YEAR }), esc(F.num(m.active)), esc(t("mgr.activeSub", { n: F.num(m.activePrev), all: F.num(m.count) }))),
+    tile(t("ov.active", { p: P.short }), esc(F.num(m.active)), esc(t("mgr.activeSub", { n: F.num(m.activePrev), all: F.num(m.count) }))),
     tile(t("kpi.newYtd"), esc(F.num(m.newYtd)), esc(t("mgr.new30", { n: F.num(m.new30) }))),
   ] : [
     tile(t("col.customers"), esc(F.num(m.count)), esc(t("kpi.foreignSub", { n: m.foreign })), true),
@@ -1053,13 +1121,13 @@ function renderManager(main) {
         <h1>${esc(name)}</h1>
         <div class="chips">
           ${chip(t("col.customers"), F.num(m.count), `#customers?pm=${encodeURIComponent(key)}`)}
-          ${S.hasInvoices ? chip(t("mgr.chipActive", { year: YEAR }), F.num(m.active), `#sales?r=ytd&pm=${encodeURIComponent(key)}`) : ""}
+          ${S.hasInvoices ? chip(t("mgr.chipActive", { p: P.short }), F.num(m.active), `#sales?pm=${encodeURIComponent(key)}`) : ""}
           ${chip(t("col.foreign"), F.num(m.foreign), `#customers?pm=${encodeURIComponent(key)}&sort=country`)}
         </div>
       </div>
       <div class="cust-contact">
-        ${S.hasInvoices ? `<div class="eyebrow">${esc(t("mgr.topCustomer", { year: YEAR }))}</div><div>${top && top.st.ytd.get("HUF") ? `${custLink(top)} · ${esc(compactMoney(hufOf(top.st.ytd), "HUF"))}` : "–"}</div>
-        <div class="eyebrow">${esc(t("mgr.topIndustry", { year: YEAR }))}</div><div>${topIndustry ? `${esc(topIndustry[0] || t("none"))} · ${esc(compactMoney(topIndustry[1] / 100, "HUF"))}` : "–"}</div>` : ""}
+        ${S.hasInvoices ? `<div class="eyebrow">${esc(t("mgr.topCustomer", { p: P.short }))}</div><div>${top && top.st.ytd.get("HUF") ? `${custLink(top)} · ${esc(compactMoney(hufOf(top.st.ytd), "HUF"))}` : "–"}</div>
+        <div class="eyebrow">${esc(t("mgr.topIndustry", { p: P.short }))}</div><div>${topIndustry ? `${esc(topIndustry[0] || t("none"))} · ${esc(compactMoney(topIndustry[1] / 100, "HUF"))}` : "–"}</div>` : ""}
       </div>
     </section>
     <section class="kpis">${kpis.join("")}</section>
@@ -1071,15 +1139,15 @@ function renderManager(main) {
         </section>` : ""}
         ${S.hasOffers ? offersCard(m) : ""}
         <section class="card">
-          <div class="card-head"><h2>${esc(t("d.customersOf"))} (${esc(F.num(m.count))})</h2><a class="sub" href="#sales?r=ytd&by=customer&pm=${encodeURIComponent(key)}">${S.hasInvoices ? esc(t("mgr.toSales")) : ""}</a></div>
+          <div class="card-head"><h2>${esc(t("d.customersOf"))} (${esc(F.num(m.count))})</h2><a class="sub" href="#sales?by=customer&pm=${encodeURIComponent(key)}">${S.hasInvoices ? esc(t("mgr.toSales")) : ""}</a></div>
           <div id="mgr-customers"></div>
         </section>
       </div>
       <div class="stack">
-        ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { year: YEAR }))}</h2></div>
-          <dl class="rows">${currencyOrder().filter((c) => m.ytd.has(c)).map((c) => `<div><dt><a href="#sales?r=ytd&cur=${encodeURIComponent(c)}&pm=${encodeURIComponent(key)}"><b>${esc(c)}</b></a></dt>
+        ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { p: P.short }))}</h2></div>
+          <dl class="rows">${currencyOrder().filter((c) => m.ytd.has(c)).map((c) => `<div><dt><a href="#sales?cur=${encodeURIComponent(c)}&pm=${encodeURIComponent(key)}"><b>${esc(c)}</b></a></dt>
             <dd>${esc(F.money(m.ytd.get(c) / 100, c))}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
-        <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { year: YEAR }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
+        <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { p: P.short }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
           ${hbars([...byIndustry.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: esc(k || t("none")), value: v / 100, tip: `${k || t("none")}\n${F.money(v / 100, "HUF")}` })), (v) => compactMoney(v, "HUF"))}</section>` : ""}
         <section class="card"><div class="card-head"><h2>${esc(t("chart.latest"))}</h2></div>
           <dl class="rows">${latest.map((c) => `<div><dt>${custLink(c)}</dt><dd class="none">${newBadge(c)}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
@@ -1094,10 +1162,10 @@ function renderManager(main) {
   const cols = [
     { key: "name", label: t("col.name"), value: (c) => c.name, html: (c) => custLink(c), wrap: true },
     ...(S.hasInvoices ? [
-      { key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)) },
+      { key: "ytd", label: t("col.revenueYtd", { p: P.short }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)) },
       { key: "change", label: t("sales.col.change"), num: true, value: (c) => (c.st.main(c.st.prev) ? (c.st.main(c.st.ytd) - c.st.main(c.st.prev)) / Math.abs(c.st.main(c.st.prev)) : null),
         html: (c) => `<span title="${esc(`${t("mgr.col.prev")}: ${money(c, c.st.prev)}`)}">${changeHtml(c.st.main(c.st.ytd), c.st.main(c.st.prev))}</span>` },
-      { key: "inv", label: t("mgr.col.invoices", { year: YEAR }), num: true, value: (c) => c.st.ytdCount },
+      { key: "inv", label: t("mgr.col.invoices", { p: P.short }), num: true, value: (c) => c.st.ytdCount },
     ] : []),
     { key: "industry", label: t("col.industry"), value: (c) => c.industryLabel, html: (c) => codeLabel(c.industry, c.industry_code) },
   ];
@@ -1119,7 +1187,7 @@ function customerColumns() {
   ];
   if (S.hasInvoices) {
     const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
-    cols.push({ key: "ytd", label: t("col.revenueYtd", { year: YEAR }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)), csv: (c) => moneyList(c.st.ytd) });
+    cols.push({ key: "ytd", label: t("col.revenueYtd", { p: P.short }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)), csv: (c) => moneyList(c.st.ytd) });
     if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (c) => c.st.main(c.st.open) || null,
       html: (c) => (c.st.openN ? `${c.st.overdueN ? `<span class="pill bad">${c.st.overdueN}</span> ` : ""}${esc(money(c, c.st.open))}` : ""), csv: (c) => moneyList(c.st.open) });
   }
@@ -1202,19 +1270,19 @@ function renderCustomer(main) {
     const others = (map) => (st.others(map).size ? `<br>${esc(t("cust.otherCur", { list: moneyList(st.others(map)) }))}` : "");
     const yearsSpan = st.firstYear ? (st.firstYear === st.lastYear ? `${st.firstYear}` : `${st.firstYear}–${st.lastYear}`) : "";
     kpis = [
-      kpiTile(t("cust.revenueYtd", { year: YEAR }), bigMoney(ytd, st.cur),
+      kpiTile(t("cust.revenueYtd", { p: P.short }), bigMoney(ytd, st.cur),
         (delta == null ? esc(t("cust.noPrev")) : `<span class="${delta >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(delta) }))}</span>`) + others(st.ytd), true),
       S.hasPayments
         ? kpiTile(t("cust.openInvoices"), bigMoney(st.main(st.open), st.cur),
           esc(st.overdueN ? t("cust.overdueCount", { n: st.openN, o: st.overdueN }) : t("cust.openCount", { n: st.openN })) + others(st.open))
-        : kpiTile(t("cust.invoicesYtd", { year: YEAR }), esc(F.num(st.ytdCount)),
+        : kpiTile(t("cust.invoicesYtd", { p: P.short }), esc(F.num(st.ytdCount)),
           esc([st.ytdCredits ? t("cust.creditCount", { n: st.ytdCredits }) : "", t("cust.invoiceCountAll", { n: F.num(st.count) })].filter(Boolean).join(" · "))),
       termsTile,
       kpiTile(t("cust.revenueTotal"), bigMoney(st.main(st.total), st.cur), esc(yearsSpan) + others(st.total)),
     ];
   } else {
     const empty = (label) => kpiTile(label, `<span class="empty">–</span>`, esc(t("cust.noExport")));
-    kpis = [empty(t("cust.revenueYtd", { year: YEAR })), empty(t("cust.invoicesYtd", { year: YEAR })), termsTile, empty(t("cust.revenueTotal"))];
+    kpis = [empty(t("cust.revenueYtd", { p: P.short })), empty(t("cust.invoicesYtd", { p: P.short })), termsTile, empty(t("cust.revenueTotal"))];
   }
 
   const src = (key) => S.meta.sources?.[key];
@@ -1414,7 +1482,7 @@ function periodLabel(key, g, short = false) {
 /* Bar chart over periods.
    mode "highlight": one series, the last (current) period in the accent colour;
    mode "compare":   previous year (muted) next to this period (accent). */
-function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270 }) {
+function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270, shift = 1 }) {
   const n = keys.length;
   const W = Math.max(300, host.clientWidth), H = height;
   const m = { l: 56, r: 8, t: 24, b: 30 };
@@ -1452,7 +1520,7 @@ function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "high
     }
     const tipLines = [periodLabel(k, g), F.money(values[i], cur)];
     if (prev) {
-      tipLines.push(`${t("sales.prevYear")} (${periodLabel(shiftKeyYear(k, -1), g)}): ${F.money(prev[i], cur)}`);
+      tipLines.push(`${t("sales.prevYear")} (${periodLabel(shiftKeyYear(k, -shift), g)}): ${F.money(prev[i], cur)}`);
       if (prev[i]) tipLines.push(`${t("sales.col.change")}: ${F.signedPct((values[i] - prev[i]) / Math.abs(prev[i]))}`);
     }
     svg += `<rect class="band" x="${m.l + bw * i}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(tipLines.join("\n"))}"/>`;
@@ -1462,19 +1530,22 @@ function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "high
 
 /* ---------- sales view ---------- */
 
-const RANGES = ["12m", "ytd", "ly", "3y", "all"];
-const DEFAULT_GRAN = { "12m": "month", ytd: "month", ly: "month", "3y": "quarter", all: "year", custom: "month" };
 const BREAKDOWNS = ["customer", "manager", "region", "industry", "country", "clerk"];
 
+/* The sales tab shows the period picked in the top bar, unless custom dates are
+   set here. Comparison: shifted back like everywhere else (P.shift years). */
 function salesRange(p) {
-  const first = S.invoices.reduce((a, i) => (i.date && (!a || i.date < a) ? i.date : a), null) || TODAY;
-  if (p.get("from") || p.get("to")) return { from: p.get("from") || first, to: p.get("to") || TODAY, preset: "custom" };
-  const r = RANGES.includes(p.get("r")) ? p.get("r") : "12m";
-  if (r === "ytd") return { from: PERIOD.ytd, to: TODAY, preset: r };
-  if (r === "ly") return { from: `${YEAR - 1}-01-01`, to: `${YEAR - 1}-12-31`, preset: r };
-  if (r === "3y") return { from: `${YEAR - 2}-01-01`, to: TODAY, preset: r };
-  if (r === "all") return { from: first, to: TODAY, preset: r };
-  return { from: isoDate(new Date(YEAR, NOW.getMonth() - 11, 1)), to: TODAY, preset: "12m" };
+  if (p.get("from") || p.get("to")) {
+    const from = p.get("from") || S.firstDate || TODAY, to = p.get("to") || TODAY;
+    const shift = Math.max(1, Math.ceil((daysBetween(from, to) + 1) / 366));
+    return { from, to, shift, prevFrom: shiftIsoYear(from, -shift), prevTo: shiftIsoYear(to, -shift), custom: true };
+  }
+  return { from: P.from, to: P.to, shift: P.shift, prevFrom: P.prevFrom, prevTo: P.prevTo, custom: false };
+}
+/* A sensible time breakdown for the length of the range */
+function autoGran(from, to) {
+  const days = daysBetween(from, to) + 1;
+  return days <= 45 ? "day" : days <= 120 ? "week" : days <= 800 ? "month" : days <= 2000 ? "quarter" : "year";
 }
 
 function breakdownKey(by, i) {
@@ -1511,19 +1582,22 @@ function renderSales(main) {
   const sortedSet = (key) => [...new Set(S.customers.map((c) => c[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, F.loc));
   const countries = [...new Set(S.customers.map((c) => c.country).filter(Boolean))].sort();
   const range0 = salesRange(p);
+  const rangeChip = (r) => `<span class="chip"><b>${esc(t("sales.ctl.range"))}</b>${esc(r.custom ? t("range.custom") : P.short)}</span>
+    <span class="muted range-dates">${esc(`${F.date(r.from)} – ${F.date(r.to)}`)}</span>
+    ${r.custom ? `<button type="button" class="link-btn" data-act="clear-dates">${esc(t("sales.backToPeriod", { p: P.short }))}</button>`
+      : `<span class="muted">${esc(t("sales.periodHint"))}</span>`}`;
 
   main.innerHTML = `<div class="sales-view" style="display:contents">
     <section class="card sales-controls">
       <div class="ctl-row">
-        <span class="ctl-label">${esc(t("sales.ctl.range"))}</span>
-        ${pills("r", RANGES.map((r) => [r, t("range." + r)]), range0.preset)}
+        <span class="range-info">${rangeChip(range0)}</span>
         <span class="ctl-dates">${fDate("from", "f.fromDate")}${fDate("to", "f.toDate")}</span>
       </div>
       <div class="ctl-row">
         <span class="ctl-label">${esc(t("sales.gran"))}</span>
-        ${pills("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || DEFAULT_GRAN[range0.preset])}
+        ${pills("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || autoGran(range0.from, range0.to))}
         <span class="ctl-label">${esc(t("sales.ctl.amount"))}</span>
-        ${pills("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || "net")}
+        ${pills("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || SETTINGS.amount)}
       </div>
       <div class="filters">
         ${fSearch("q", "f.searchCustomers")}
@@ -1550,8 +1624,8 @@ function renderSales(main) {
     host.style.minHeight = `${tallest}px`;
     state = drawSales(host, currencies);
     window.scrollTo(0, y);
-    // reflect the effective choices (defaults, custom dates) on the buttons
-    controls.querySelectorAll('.seg[data-param="r"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.preset));
+    // reflect the effective choices (defaults, custom dates) on the controls
+    $(".range-info", controls).innerHTML = rangeChip(state.range);
     controls.querySelectorAll('.seg[data-param="g"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.g));
   };
   const set = (updates) => { setParams(updates); tablePage["sales-by"] = 0; draw(); };
@@ -1561,15 +1635,15 @@ function renderSales(main) {
     const btn = e.target.closest(".seg[data-param] button, .cur-switch[data-param] button");
     if (btn) {
       const group = btn.closest("[data-param]"), param = group.dataset.param, value = btn.dataset.value;
-      if (param === "r") {
-        controls.querySelectorAll('input[data-param="from"], input[data-param="to"]').forEach((i) => { i.value = ""; });
-        set({ r: value, from: "", to: "", g: "" }); // a range brings its own default breakdown
-      } else set({ [param]: value });
+      set({ [param]: value });
       group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b === btn));
       return;
     }
     const act = e.target.closest("[data-act]")?.dataset.act;
-    if (act === "reset") {
+    if (act === "clear-dates") {
+      controls.querySelectorAll('input[data-param="from"], input[data-param="to"]').forEach((i) => { i.value = ""; });
+      set({ from: "", to: "", g: "" });
+    } else if (act === "reset") {
       for (const k of [...current.params.keys()]) setParams({ [k]: "" });
       route();
     } else if (act === "export") {
@@ -1597,9 +1671,9 @@ function renderSales(main) {
 function drawSales(host, currencies) {
   const p = current.params;
   const range = salesRange(p);
-  const g = GRANS.includes(p.get("g")) ? p.get("g") : DEFAULT_GRAN[range.preset];
+  const g = GRANS.includes(p.get("g")) ? p.get("g") : autoGran(range.from, range.to);
   const cur = currencies.includes(p.get("cur")) ? p.get("cur") : (currencies.includes("HUF") ? "HUF" : currencies[0]);
-  const amt = p.get("amt") === "gross" ? "gross" : "net";
+  const amt = (p.get("amt") || SETTINGS.amount) === "gross" ? "gross" : "net";
   const by = BREAKDOWNS.includes(p.get("by")) ? p.get("by") : "customer";
   const amount = (i) => cents(amt === "gross" ? (i.gross ?? i.net) : i.net);
   const words = (p.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -1607,7 +1681,7 @@ function drawSales(host, currencies) {
     (!p.get("pm") || pmKey(c) === p.get("pm")) && (!p.get("region") || c.regionLabel === p.get("region")) &&
     (!p.get("industry") || c.industryLabel === p.get("industry")) && (!p.get("country") || c.country === p.get("country")) &&
     words.every((w) => c._s.includes(w));
-  const pFrom = shiftIsoYear(range.from, -1), pTo = shiftIsoYear(range.to, -1);
+  const pFrom = range.prevFrom, pTo = range.prevTo, shift = range.shift;
 
   const keys = periodKeys(range.from, range.to, g);
   const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
@@ -1616,7 +1690,7 @@ function drawSales(host, currencies) {
   for (const i of S.invoices) {
     if (!i.date || !customerOk(i.c)) continue;
     const inRange = i.date >= range.from && i.date <= range.to;
-    const inPrev = i.date >= pFrom && i.date <= pTo;
+    const inPrev = !!pFrom && i.date >= pFrom && i.date <= pTo;
     if (!inRange && !inPrev) continue;
     if (inRange) addTo(byCur, i.cur, amount(i));
     if (i.cur !== cur) continue;
@@ -1631,7 +1705,7 @@ function drawSales(host, currencies) {
       if (i.credit) credits++; else { count++; grp.n++; positive += v; }
     }
     if (inPrev) {
-      const row = per.get(shiftKeyYear(periodKey(i.date, g), 1));
+      const row = per.get(shiftKeyYear(periodKey(i.date, g), shift));
       if (row) row.prev += v;
       prevTotal += v; grp.prev += v;
     }
@@ -1641,7 +1715,7 @@ function drawSales(host, currencies) {
   const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const change = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
   const rangeText = `${F.date(range.from)} – ${F.date(range.to)}`;
-  const prevText = `${F.date(pFrom)} – ${F.date(pTo)}`;
+  const prevText = pFrom ? `${F.date(pFrom)} – ${F.date(pTo)}` : t("sales.noCompare");
 
   host.innerHTML = `
     <section class="cur-switch" data-param="cur" role="group" aria-label="${esc(t("sales.ctl.currency"))}">
@@ -1676,8 +1750,8 @@ function drawSales(host, currencies) {
       <div id="sales-by"></div>
     </section>`;
 
-  drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: periods.map((r) => r.prev / 100),
-    cur, mode: "compare", label: t("sales.chart"), height: 240 });
+  drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: pFrom ? periods.map((r) => r.prev / 100) : null,
+    cur, mode: "compare", label: t("sales.chart"), height: 240, shift });
   const rows = [...groups.values()].filter((r) => r.v || r.prev);
   drawTable($("#sales-by", host), {
     id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
@@ -1690,7 +1764,7 @@ function drawSales(host, currencies) {
       { key: "change", label: t("sales.col.change"), num: true, value: (r) => (r.prev ? (r.v - r.prev) / Math.abs(r.prev) : null), html: (r) => change(r.v, r.prev) },
     ],
   });
-  return { g, cur, periods, preset: range.preset };
+  return { g, cur, periods, range };
 }
 
 /* ---------- import status page ---------- */
@@ -1752,6 +1826,104 @@ function renderStatus(main) {
   $("#warn-filter")?.addEventListener("input", (e) => {
     const q = e.target.value.toLowerCase();
     document.querySelectorAll("#warn-list li").forEach((li) => { li.hidden = q && !li.textContent.toLowerCase().includes(q); });
+  });
+}
+
+/* ---------- settings (stored in this browser) ---------- */
+
+function renderSettings(main) {
+  const row = (label, control, hint = "") => `<div class="set-row"><div><div class="set-label">${esc(label)}</div>${hint ? `<div class="muted set-hint">${esc(hint)}</div>` : ""}</div><div>${control}</div></div>`;
+  main.innerHTML = `
+    <section class="card help-intro"><h1>${esc(t("set.title"))}</h1><p>${esc(t("set.intro"))}</p></section>
+    <div class="grid-2">
+      <section class="card">
+        <div class="card-head"><h2>${esc(t("set.periods"))}</h2><span class="sub">${esc(t("set.periodsSub"))}</span></div>
+        <div class="table-wrap plain"><table>
+          <thead><tr><th>${esc(t("set.name"))}</th><th>${esc(t("set.from"))}</th><th>${esc(t("set.to"))}</th><th></th></tr></thead>
+          <tbody>${CUSTOM_PERIODS.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(F.date(c.from))}</td><td>${esc(F.date(c.to))}</td>
+            <td class="num"><button type="button" class="link-btn" data-use="${esc(c.id)}">${esc(t("set.use"))}</button> ·
+              <button type="button" class="link-btn danger" data-del="${esc(c.id)}">${esc(t("set.delete"))}</button></td></tr>`).join("")
+            || `<tr class="empty-row"><td colspan="4">${esc(t("set.noPeriods"))}</td></tr>`}</tbody>
+        </table></div>
+        <form class="set-form" id="period-form">
+          <input name="name" required maxlength="40" placeholder="${esc(t("set.namePh"))}">
+          <input name="from" type="date" required aria-label="${esc(t("set.from"))}">
+          <input name="to" type="date" required aria-label="${esc(t("set.to"))}">
+          <button type="submit">${esc(t("set.add"))}</button>
+        </form>
+        <div class="card-foot" id="period-msg"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>${esc(t("set.defaults"))}</h2></div>
+        ${row(t("set.period"), `<span class="muted">${esc(periodOptionLabel(P.key))}</span>`, t("set.periodHint"))}
+        ${row(t("set.amount"), pills("amount", [["net", t("sales.net")], ["gross", t("sales.gross")]], SETTINGS.amount), t("set.amountHint"))}
+        ${row(t("set.newDays"), `<input type="number" id="new-days" min="1" max="365" value="${esc(CONFIG.newDays)}"> <span class="muted">${esc(t("set.days"))}</span>`, t("set.newDaysHint"))}
+        ${row(t("theme"), `<select id="theme"><option value="auto">${esc(t("theme.auto"))}</option><option value="light">${esc(t("theme.light"))}</option>
+          <option value="dark">${esc(t("theme.dark"))}</option></select>`)}
+        ${row(t("lang"), `<select id="lang"><option value="hu">Magyar</option><option value="en">English</option></select>`)}
+        <h3>${esc(t("set.reset"))}</h3>
+        <div class="set-actions">
+          <button type="button" class="secondary" data-act="cols">${esc(t("set.resetCols"))}</button>
+          <button type="button" class="secondary" data-act="welcome">${esc(t("set.resetWelcome"))}</button>
+          <button type="button" class="secondary" data-act="all">${esc(t("set.resetAll"))}</button>
+        </div>
+        <div class="card-foot" id="set-msg"></div>
+      </section>
+    </div>`;
+
+  // the page may already be gone (e.g. a field's change event fires as you navigate away)
+  const msg = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  $("#theme").value = document.documentElement.dataset.theme || "auto";
+  $("#lang").value = LANG;
+  $("#period-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target), name = String(f.get("name")).trim(), from = f.get("from"), to = f.get("to");
+    if (!name || !from || !to) return;
+    if (from > to) { msg("#period-msg", t("set.badRange")); return; }
+    const id = Date.now().toString(36);
+    CUSTOM_PERIODS.push({ id, name, from, to });
+    saveJson("customPeriods", CUSTOM_PERIODS);
+    applyPeriod(`c:${id}`); // use it right away
+  });
+  main.addEventListener("click", (e) => {
+    const use = e.target.closest("[data-use]"), del = e.target.closest("[data-del]");
+    if (use) { applyPeriod(`c:${use.dataset.use}`); return; }
+    if (del) {
+      CUSTOM_PERIODS = CUSTOM_PERIODS.filter((c) => c.id !== del.dataset.del);
+      saveJson("customPeriods", CUSTOM_PERIODS);
+      applyPeriod(P.key === `c:${del.dataset.del}` ? "ytd" : P.key);
+      return;
+    }
+    const amount = e.target.closest('.seg[data-param="amount"] button');
+    if (amount) {
+      SETTINGS.amount = amount.dataset.value;
+      saveJson("settings", SETTINGS);
+      amount.parentElement.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b === amount));
+      msg("#set-msg", t("set.saved"));
+      return;
+    }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    try {
+      if (act === "cols") Object.keys(localStorage).filter((k) => k.startsWith("cols:")).forEach((k) => localStorage.removeItem(k));
+      if (act === "welcome") localStorage.removeItem("welcomed");
+      if (act === "all") {
+        ["settings", "customPeriods", "period", "welcomed", "theme", "lang"].forEach((k) => localStorage.removeItem(k));
+        Object.keys(localStorage).filter((k) => k.startsWith("cols:")).forEach((k) => localStorage.removeItem(k));
+        location.reload();
+        return;
+      }
+    } catch { /* storage blocked */ }
+    if (act) msg("#set-msg", t("set.done"));
+  });
+  $("#new-days").addEventListener("change", (e) => {
+    const n = Math.round(+e.target.value);
+    if (!(n >= 1 && n <= 365)) { e.target.value = CONFIG.newDays; return; }
+    SETTINGS.newDays = n;
+    saveJson("settings", SETTINGS);
+    applyNewDays();
+    index(S.data);
+    S.checks = null;
+    msg("#set-msg", t("set.saved"));
   });
 }
 
@@ -1859,19 +2031,45 @@ function searchCustomers(q, limit = 8) {
 
 window.addEventListener("hashchange", route);
 
+/* Period picker (top bar): the default period everywhere; remembered per browser. */
+function renderPeriodSelect() {
+  const sel = $("#period");
+  const opt = (k) => `<option value="${esc(k)}"${k === P.key ? " selected" : ""}>${esc(periodOptionLabel(k))}</option>`;
+  sel.innerHTML = PERIOD_KEYS.map(opt).join("") +
+    (CUSTOM_PERIODS.length ? `<optgroup label="${esc(t("per.custom"))}">${CUSTOM_PERIODS.map((c) => opt(`c:${c.id}`)).join("")}</optgroup>` : "") +
+    `<option value="__manage">${esc(t("per.manage"))}</option>`;
+  sel.closest("label").title = `${t("per.title")}: ${F.date(P.from)} – ${F.date(P.to)}` +
+    (P.prevFrom ? `\n${t("per.compare")}: ${F.date(P.prevFrom)} – ${F.date(P.prevTo)}` : "");
+}
+function applyPeriod(key) {
+  try { localStorage.setItem("period", key); } catch { /* not remembered */ }
+  index(S.data);
+  S.checks = null;
+  renderPeriodSelect();
+  route();
+}
+$("#period").addEventListener("change", (e) => {
+  if (e.target.value === "__manage") { e.target.value = P.key; location.hash = "#settings"; return; }
+  applyPeriod(e.target.value);
+});
+
 /* Theme: "auto" follows the OS setting (the default); light/dark override it.
    The colours are CSS variables, so no re-render is needed. */
-$("#theme").addEventListener("change", (e) => {
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "theme") return;
   const v = e.target.value;
   if (v === "light" || v === "dark") document.documentElement.dataset.theme = v;
   else delete document.documentElement.dataset.theme;
   try { if (v === "auto") localStorage.removeItem("theme"); else localStorage.setItem("theme", v); } catch { /* not saved */ }
 });
 
-$("#lang").addEventListener("change", (e) => {
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "lang") return;
   setLang(e.target.value);
   buildFormatters();
   renderChrome();
+  P = buildPeriod(P.key);
+  renderPeriodSelect();
   route();
 });
 

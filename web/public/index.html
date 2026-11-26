@@ -21,20 +21,13 @@
         <button type="submit" data-i18n="search.open">Megnyitás</button>
         <ul id="suggest" class="suggest" role="listbox" hidden></ul>
       </form>
+      <label class="period-pick" title="">
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <select id="period" aria-label="Időszak / Period"></select>
+      </label>
       <div class="topbar-right">
         <span id="fake-tag" class="tag" hidden></span>
         <span id="freshness">…</span>
-        <select id="theme" class="theme" aria-label="Téma / Theme">
-          <option value="auto" data-i18n="theme.auto">Automatikus</option>
-          <option value="light" data-i18n="theme.light">Világos</option>
-          <option value="dark" data-i18n="theme.dark">Sötét</option>
-        </select>
-        <label class="lang"><span class="sr-only" data-i18n="lang" hidden>Nyelv</span>
-          <select id="lang" aria-label="Nyelv / Language">
-            <option value="hu">Magyar</option>
-            <option value="en">English</option>
-          </select>
-        </label>
       </div>
     </div>
   </header>
