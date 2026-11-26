@@ -73,11 +73,10 @@ the raw code without warnings.
 | View | Content |
 |---|---|
 | Top bar | Search by customer number or name (suggestions; Enter opens the customer), data date, MINTA tag |
-| Áttekintés | Customers, new customers (30 days / year to date), without Ügyintéző, foreign; new per month; by Ügyintéző, industry, region, country; latest |
-| Ügyintézők | Per Ügyintéző: customers, share, new, foreign, last new customer (+ sales / open invoices once invoices exist) |
-| Vevők | All customers with filters (Ügyintéző, country, region, industry, created date, search) and CSV export |
+| Áttekintés | With invoices: sales this year and last month (vs the previous year), active customers, new customers, customers without Ügyintéző; monthly sales vs the previous year; top customers; sales by Ügyintéző, industry and region (net, HUF invoices); sales per currency; new customers per month and the latest ones. Without invoices: the customer statistics |
+| Vevők | All customers (default columns: name, industry, Ügyintéző, tax no., currency, payment terms, sales this year, country, region, city) with filters and CSV export |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
-| Értékesítés (Sales) | Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
+| Értékesítés (Sales) | Button groups for range, time breakdown and net/gross; one large button per currency showing its total (currencies are never added). Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
 | ⚠ tab (right end of the tab bar) | Import status: warnings from the last import (searchable), stale-data alert, data sources with row counts, skipped blocked customers. The icon is grey when all is well, amber with a count when there are warnings, red when the export is overdue |
 
 Filters, sorting and the open customer are in the URL: links can be shared and bookmarked.

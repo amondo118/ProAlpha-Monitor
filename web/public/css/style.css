@@ -233,6 +233,29 @@ td.wrap { white-space: normal; min-width: 200px; }
 .seg button:last-child { border-right: 0; }
 .seg button:hover { background: var(--surface-2); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.seg-lg button { padding: 6px 12px; font-size: 13px; }
+
+/* sales controls: labelled rows of button groups */
+.sales-controls { display: grid; gap: 12px; }
+.ctl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ctl-label { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); }
+.ctl-row .ctl-label:not(:first-child) { margin-left: 12px; }
+.ctl-dates { display: inline-flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.sales-controls .filters { padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* currency switch: one large button per currency, with its total for the range */
+.cur-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.cur-switch button { display: grid; gap: 2px; text-align: left; min-width: 120px; padding: 8px 14px; border-radius: 10px;
+  background: var(--surface); color: var(--text); border: 2px solid var(--border); font-weight: 400; box-shadow: var(--shadow); }
+.cur-switch button:hover { background: var(--surface-2); border-color: var(--accent); }
+.cur-switch button b { font-family: var(--font-display); font-size: 18px; line-height: 1.1; }
+.cur-switch button span { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); }
+.cur-switch button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.cur-switch .cur-hint { color: var(--text-3); font-size: 12px; }
+
+/* sales chart and period list side by side, same height */
+.sales-pair .card { display: flex; flex-direction: column; }
+.table-wrap.periods { max-height: 300px; overflow: auto; }
 .chart .gridline { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .baseline { stroke: var(--text-3); stroke-width: 1; }
 .chart .axis-label { fill: var(--text-3); font-family: var(--font-mono); font-size: 11px; }

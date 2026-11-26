@@ -237,7 +237,7 @@ function customerStats(c) {
 /* ---------- routing & URL state ---------- */
 
 const VIEWS = ["overview", "sales", "managers", "customers", "customer", "status"];
-const TABS = ["overview", "sales", "managers", "customers"];
+const TABS = ["overview", "sales", "customers", "managers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
 const tablePage = {};
@@ -601,14 +601,16 @@ function exportCsv(name, columns, rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-/* Horizontal bars. items: [{label (html), value, tip}] */
-function hbars(items) {
+/* Horizontal bars. items: [{label (html), value, tip}]; fmt formats the value column. */
+function hbars(items, fmt = (v) => F.num(v)) {
   const max = Math.max(...items.map((i) => i.value), 1);
+  if (!items.length) return `<div class="empty-state">${esc(t("t.empty"))}</div>`;
   return `<div class="hbars">${items.map((i) => `
     <span class="name">${i.label}</span>
-    <span class="track" data-tip="${esc(i.tip)}"><span class="fill" style="width:${(i.value / max) * 100}%"></span></span>
-    <span class="val">${esc(F.num(i.value))}</span>`).join("")}</div>`;
+    <span class="track" data-tip="${esc(i.tip)}"><span class="fill" style="width:${(Math.max(0, i.value) / max) * 100}%"></span></span>
+    <span class="val">${esc(fmt(i.value))}</span>`).join("")}</div>`;
 }
+const compactMoney = (v, cur) => { const p = F.compactParts(v, cur); return `${p.num} ${p.unit}`.trim(); };
 
 function countBy(rows, keyFn) {
   const m = new Map();
@@ -642,70 +644,126 @@ function renderOverview(main) {
   const pmCount = [...S.managers.keys()].filter((k) => k !== NONE).length;
 
   const tile = (href, label, value, sub, hl = false) =>
-    `<a class="kpi${hl ? " hl" : ""}" href="${href}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></a>`;
+    `<a class="kpi${hl ? " hl" : ""}" href="${href}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></a>`;
+  const deltaHtml = (now, prev, key = "cust.vsPrev") => (prev
+    ? `<span class="${now >= prev ? "delta-up" : "delta-down"}">${esc(t(key, { pct: F.signedPct((now - prev) / Math.abs(prev)) }))}</span>` : "");
+  const big = (v) => { const p = F.compactParts(v, "HUF"); return `${esc(p.num)}<span class="unit">${esc(p.unit)}</span>`; };
   const pmItems = [...S.managers.values()].sort((a, b) => b.count - a.count).map((m) => ({
     label: pmLink(m.key), value: m.count,
     tip: `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}\n${t("col.newYtd")}: ${m.newYtd}`,
   }));
-  const groupItems = (key, param, label) => countBy(all, (c) => c[key]).slice(0, CONFIG.topN).map(([k, n]) => ({
-    label: k ? `<a href="#customers?${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
-    value: n, tip: `${k ? label(k) : t("none")}\n${t("chart.customersN", { n: F.num(n) })}`,
-  }));
-  const latest = [...all].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created) || b.id.localeCompare(a.id)).slice(0, 10);
-
-  // Sales this year (HUF part; other currencies are on the Sales tab)
-  let salesTile = "";
-  if (S.hasInvoices) {
-    let ytd = 0, prev = 0;
-    for (const i of S.invoices) {
-      if (i.cur !== "HUF" || !i.date) continue;
-      if (i.date >= PERIOD.ytd) ytd += cents(i.net);
-      else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) prev += cents(i.net);
-    }
-    const d = prev ? (ytd - prev) / Math.abs(prev) : null;
-    const p = F.compactParts(ytd / 100, "HUF");
-    salesTile = `<a class="kpi hl" href="#sales?r=ytd"><div class="label">${esc(t("kpi.salesYtd", { year: YEAR }))}</div>
-      <div class="value">${esc(p.num)}<span class="unit">${esc(p.unit)}</span></div>
-      <div class="sub">${d == null ? "" : `<span class="${d >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(d) }))}</span>`}</div></a>`;
-  }
-  main.innerHTML = `
-    <section class="kpis">
-      ${salesTile}
-      ${tile("#customers", t("kpi.customers"), F.num(all.length), t("kpi.customersSub", { n: pmCount }), !S.hasInvoices)}
-      ${tile(`#customers?from=${PERIOD.new}`, t("kpi.new30"), F.num(new30), t("kpi.vsPrev30", { n: F.num(prev30) }))}
-      ${tile(`#customers?from=${PERIOD.ytd}`, t("kpi.newYtd"), F.num(newYtd), t("kpi.vsPrevYtd", { n: F.num(prevYtd) }))}
-      ${tile(`#customers?pm=${NONE}`, t("kpi.noManager"), F.num(noPm), t("kpi.noManagerSub"))}
-      ${tile("#customers?sort=country", t("kpi.foreign"), F.num(foreign.length), t("kpi.foreignSub", { n: new Set(foreign.map((c) => c.country)).size }))}
-    </section>
-    <section class="card chart">
+  const latest = [...all].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created) || b.id.localeCompare(a.id)).slice(0, 8);
+  const latestCard = `<section class="card">
+      <div class="card-head"><h2>${esc(t("chart.latest"))}</h2><a class="sub" href="#customers?from=${PERIOD.new}">${esc(t("ov.allNew"))}</a></div>
+      <div class="table-wrap plain"><table><thead><tr><th>${esc(t("col.name"))}</th><th>${esc(t("col.manager"))}</th><th>${esc(t("col.created"))}</th></tr></thead>
+      <tbody>${latest.map((c) => `<tr><td class="wrap">${custLink(c)}</td><td>${pmLink(pmKey(c))}</td><td>${newBadge(c)}</td></tr>`).join("")}</tbody></table></div>
+    </section>`;
+  const newChartCard = `<section class="card chart">
       <div class="card-head"><h2>${esc(t("chart.newMonthly"))}</h2><span class="sub">${esc(t("chart.newMonthlySub"))}</span></div>
       <div id="monthly"></div>
+    </section>`;
+  const customerTiles = `
+      ${tile(`#customers?from=${PERIOD.new}`, t("kpi.new30"), esc(F.num(new30)), esc(t("kpi.vsPrev30", { n: F.num(prev30) })))}
+      ${tile(`#customers?pm=${NONE}`, t("kpi.noManager"), esc(F.num(noPm)), esc(t("kpi.noManagerSub")))}`;
+
+  if (!S.hasInvoices) {
+    // Customer data only: the customer dashboard
+    const groupItems = (key, param, label) => countBy(all, (c) => c[key]).slice(0, CONFIG.topN).map(([k, n]) => ({
+      label: k ? `<a href="#customers?${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
+      value: n, tip: `${k ? label(k) : t("none")}\n${t("chart.customersN", { n: F.num(n) })}`,
+    }));
+    main.innerHTML = `
+      <section class="kpis">
+        ${tile("#customers", t("kpi.customers"), esc(F.num(all.length)), esc(t("kpi.customersSub", { n: pmCount })), true)}
+        ${customerTiles}
+        ${tile(`#customers?from=${PERIOD.ytd}`, t("kpi.newYtd"), esc(F.num(newYtd)), esc(t("kpi.vsPrevYtd", { n: F.num(prevYtd) })))}
+        ${tile("#customers?sort=country", t("kpi.foreign"), esc(F.num(foreign.length)), esc(t("kpi.foreignSub", { n: new Set(foreign.map((c) => c.country)).size })))}
+      </section>
+      ${newChartCard}
+      <div class="grid-2">
+        <section class="card"><div class="card-head"><h2>${esc(t("chart.byManager"))}</h2></div>${hbars(pmItems)}</section>
+        ${latestCard}
+      </div>
+      <div class="grid-3">
+        <section class="card"><div class="card-head"><h2>${esc(t("chart.byIndustry"))}</h2></div>${hbars(groupItems("industryLabel", "industry", (k) => k))}</section>
+        <section class="card"><div class="card-head"><h2>${esc(t("chart.byRegion"))}</h2></div>${hbars(groupItems("regionLabel", "region", (k) => k))}</section>
+        <section class="card"><div class="card-head"><h2>${esc(t("chart.byCountry"))}</h2></div>${hbars(groupItems("country", "country", (k) => `${F.country(k)} (${k})`))}</section>
+      </div>`;
+    drawMonthly($("#monthly"), all);
+    return;
+  }
+
+  // ---- With invoices: the sales dashboard (net, HUF invoices; other currencies on the Sales tab) ----
+  const lmStart = isoDate(new Date(YEAR, NOW.getMonth() - 1, 1));
+  const lmKey = periodKey(lmStart, "month"), lmPrevKey = shiftKeyYear(lmKey, -1);
+  const from12 = isoDate(new Date(YEAR, NOW.getMonth() - 11, 1));
+  const keys = periodKeys(from12, TODAY, "month");
+  const per = new Map(keys.map((k) => [k, { v: 0, prev: 0 }]));
+  const pFrom = shiftIsoYear(from12, -1), pTo = shiftIsoYear(TODAY, -1);
+  let ytd = 0, prevYtdSales = 0, lm = 0, lmPrev = 0;
+  const active = new Set(), activePrev = new Set();
+  const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), curCount = new Map();
+  for (const i of S.invoices) {
+    if (!i.date) continue;
+    if (i.date >= PERIOD.ytd) {
+      active.add(i.c);
+      addTo(byCurrency, i.cur, cents(i.net));
+      if (!i.credit) curCount.set(i.cur, (curCount.get(i.cur) || 0) + 1);
+    } else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) activePrev.add(i.c);
+    if (i.cur !== "HUF") continue;
+    const v = cents(i.net), k = periodKey(i.date, "month");
+    if (i.date >= PERIOD.ytd) {
+      ytd += v;
+      addTo(byIndustry, i.c.industryLabel || "", v);
+      addTo(byRegion, i.c.regionLabel || "", v);
+    } else if (i.date >= PERIOD.prevYtd && i.date <= PERIOD.prevYtdEnd) prevYtdSales += v;
+    if (k === lmKey) lm += v;
+    if (k === lmPrevKey) lmPrev += v;
+    if (i.date >= from12 && per.has(k)) per.get(k).v += v;
+    if (i.date >= pFrom && i.date <= pTo) { const row = per.get(shiftKeyYear(k, 1)); if (row) row.prev += v; }
+  }
+  const money = (v) => compactMoney(v, "HUF");
+  const salesItems = (map, param, label) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN).map(([k, v]) => ({
+    label: k ? `<a href="#sales?r=ytd&${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
+    value: v / 100, tip: `${k ? label(k) : t("none")}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}`,
+  }));
+  const topCustomers = all.map((c) => [c, c.st.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN)
+    .map(([c, v]) => ({ label: custLink(c), value: v / 100, tip: `${c.name}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
+  const managerSales = [...S.managers.values()].map((m) => [m, m.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+    .map(([m, v]) => ({ label: pmLink(m.key), value: v / 100, tip: `${pmName(m.key)}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
+  const lmLabel = F.monthYear(lmKey);
+
+  main.innerHTML = `
+    <section class="kpis">
+      ${tile("#sales?r=ytd", t("kpi.salesYtd", { year: YEAR }), big(ytd / 100), deltaHtml(ytd, prevYtdSales), true)}
+      ${tile(`#sales?from=${lmStart}&to=${addDays(periodStart(periodKey(TODAY, "month"), "month"), -1)}&g=day`, t("ov.lastMonth", { month: lmLabel }), big(lm / 100), deltaHtml(lm, lmPrev, "ov.vsPrevMonth"))}
+      ${tile("#sales?r=ytd&by=customer", t("ov.active", { year: YEAR }), esc(F.num(active.size)), esc(t("ov.activeSub", { n: F.num(activePrev.size) })))}
+      ${customerTiles}
+    </section>
+    <section class="card chart">
+      <div class="card-head"><h2>${esc(t("ov.monthly"))}</h2><a class="sub" href="#sales">${esc(t("ov.details"))}</a></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>${esc(t("ov.last12"))}</span><span><i style="background:var(--bar-muted)"></i>${esc(t("sales.prevYear"))}</span></div>
+      <div id="ov-monthly"></div>
+      <div class="card-foot">${esc(t("ov.hufNote"))}</div>
     </section>
     <div class="grid-2">
-      <section class="card">
-        <div class="card-head"><h2>${esc(t("chart.byManager"))}</h2></div>
-        ${hbars(pmItems)}
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>${esc(t("chart.latest"))}</h2></div>
-        <div class="table-wrap plain"><table><thead><tr><th>${esc(t("col.name"))}</th><th>${esc(t("col.manager"))}</th><th>${esc(t("col.created"))}</th></tr></thead>
-        <tbody>${latest.map((c) => `<tr><td class="wrap">${custLink(c)}</td><td>${pmLink(pmKey(c))}</td><td>${newBadge(c)}</td></tr>`).join("")}</tbody></table></div>
-      </section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.topCustomers", { year: YEAR }))}</h2><a class="sub" href="#sales?r=ytd&by=customer">${esc(t("ov.all"))}</a></div>${hbars(topCustomers, money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byManager", { year: YEAR }))}</h2><a class="sub" href="#sales?r=ytd&by=manager">${esc(t("ov.all"))}</a></div>${hbars(managerSales, money)}</section>
     </div>
     <div class="grid-3">
-      <section class="card">
-        <div class="card-head"><h2>${esc(t("chart.byIndustry"))}</h2></div>
-        ${hbars(groupItems("industryLabel", "industry", (k) => k))}
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>${esc(t("chart.byRegion"))}</h2></div>
-        ${hbars(groupItems("regionLabel", "region", (k) => k))}
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>${esc(t("chart.byCountry"))}</h2></div>
-        ${hbars(groupItems("country", "country", (k) => `${F.country(k)} (${k})`))}
-      </section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { year: YEAR }))}</h2></div>${hbars(salesItems(byIndustry, "industry", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { year: YEAR }))}</h2></div>${hbars(salesItems(byRegion, "region", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { year: YEAR }))}</h2></div>
+        <dl class="rows">${currencyOrder().filter((c) => byCurrency.has(c)).map((c) => `<div><dt><a href="#sales?r=ytd&cur=${encodeURIComponent(c)}"><b>${esc(c)}</b></a>
+          <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${esc(F.money(byCurrency.get(c) / 100, c))}</dd></div>`).join("")}</dl>
+        <div class="card-foot">${esc(t("ov.curNote"))}</div></section>
+    </div>
+    <div class="grid-2">
+      ${newChartCard}
+      ${latestCard}
     </div>`;
+  drawPeriodChart($("#ov-monthly"), { keys, g: "month", values: keys.map((k) => per.get(k).v / 100), prev: keys.map((k) => per.get(k).prev / 100),
+    cur: "HUF", mode: "compare", label: t("ov.monthly") });
   drawMonthly($("#monthly"), all);
 }
 
@@ -778,17 +836,13 @@ function renderManagers(main) {
 
 /* ---------- customers list ---------- */
 
+/* Default order: name, industry, Ügyintéző, tax no., currency, payment terms,
+   sales this year, country, region, city (+ open invoices with payment data). */
 function customerColumns() {
   const cols = [
-    { key: "id", label: t("col.id"), value: (c) => c.id, html: (c) => custLink(c, c.id, "mono") },
     { key: "name", label: t("col.name"), value: (c) => c.name, html: (c) => custLink(c), wrap: true },
-    { key: "pm", label: t("col.manager"), value: (c) => c.account_manager, html: (c) => pmLink(pmKey(c)) },
-    { key: "created", label: t("col.created"), value: (c) => c.created, html: newBadge },
-    { key: "city", label: t("col.city"), value: (c) => c.city },
-    { key: "country", label: t("col.country"), value: (c) => c.country, html: (c) => `<span title="${esc(F.country(c.country))}">${esc(c.country)}</span>` },
-    { key: "region", label: t("col.region"), value: (c) => c.regionLabel, html: (c) => codeLabel(c.region, c.region_code) },
     { key: "industry", label: t("col.industry"), value: (c) => c.industryLabel, html: (c) => codeLabel(c.industry, c.industry_code) },
-    { key: "group", label: t("col.group"), value: (c) => c.group, html: (c) => (c.group ? `<a href="#customers?q=${encodeURIComponent(c.group)}" class="mono">${esc(c.group)}</a>` : "") },
+    { key: "pm", label: t("col.manager"), value: (c) => c.account_manager, html: (c) => pmLink(pmKey(c)) },
     { key: "tax", label: t("col.taxNumber"), value: (c) => c.tax_number, html: (c) => `<span class="mono">${esc(c.tax_number)}</span>` },
     { key: "currency", label: t("col.currency"), value: (c) => c.currencyLabel, html: (c) => codeLabel(c.currency, c.currency_code) },
     { key: "terms", label: t("col.paymentTerms"), num: true, value: (c) => c.payment_terms, html: (c) => esc(days(c.payment_terms)) },
@@ -799,8 +853,15 @@ function customerColumns() {
     if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (c) => c.st.main(c.st.open) || null,
       html: (c) => (c.st.openN ? `${c.st.overdueN ? `<span class="pill bad">${c.st.overdueN}</span> ` : ""}${esc(money(c, c.st.open))}` : ""), csv: (c) => moneyList(c.st.open) });
   }
+  cols.push(
+    { key: "country", label: t("col.country"), value: (c) => c.country, html: (c) => `<span title="${esc(F.country(c.country))}">${esc(c.country)}</span>` },
+    { key: "region", label: t("col.region"), value: (c) => c.regionLabel, html: (c) => codeLabel(c.region, c.region_code) },
+    { key: "city", label: t("col.city"), value: (c) => c.city },
+  );
   return cols;
 }
+// New column set: a fresh saved-layout key, so old saved orders don't hide the new default
+const CUSTOMER_TABLE = "customers-v2";
 
 function renderCustomers(main) {
   const p = current.params;
@@ -825,9 +886,9 @@ function renderCustomers(main) {
       (!p.get("from") || (c.created && c.created >= p.get("from"))) &&
       (!p.get("to") || (c.created && c.created <= p.get("to"))) &&
       words.every((w) => c._s.includes(w)));
-    rows = drawTable(host, { columns: customerColumns(), rows, defaultSort: "-created", total: S.customers.length,
-      totals: S.hasInvoices ? esc(t("t.mixed")) : "" });
-  }, () => exportCsv("vevok", layoutColumns("customers", customerColumns()), rows));
+    rows = drawTable(host, { id: CUSTOMER_TABLE, columns: customerColumns(), rows, defaultSort: S.hasInvoices ? "-ytd" : "name",
+      total: S.customers.length, totals: S.hasInvoices ? esc(t("t.mixed")) : "" });
+  }, () => exportCsv("vevok", layoutColumns(CUSTOMER_TABLE, customerColumns()), rows));
 }
 
 /* ---------- customer page ---------- */
@@ -1078,9 +1139,9 @@ function periodLabel(key, g, short = false) {
 /* Bar chart over periods.
    mode "highlight": one series, the last (current) period in the accent colour;
    mode "compare":   previous year (muted) next to this period (accent). */
-function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "" }) {
+function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270 }) {
   const n = keys.length;
-  const W = Math.max(300, host.clientWidth), H = 270;
+  const W = Math.max(300, host.clientWidth), H = height;
   const m = { l: 56, r: 8, t: 24, b: 30 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   const all = [...values, ...(prev || [])];
@@ -1151,57 +1212,103 @@ function breakdownKey(by, i) {
   return [c.id, c.name || c.id, customerHref(c.id)];
 }
 
+/* Currencies: HUF first, then by number of invoices (amounts in different
+   currencies can't be compared, so they never decide the order). */
+function currencyOrder() {
+  const n = new Map();
+  for (const i of S.invoices) n.set(i.cur, (n.get(i.cur) || 0) + 1);
+  return [...n.entries()].sort((a, b) => (b[0] === "HUF") - (a[0] === "HUF") || b[1] - a[1] || a[0].localeCompare(b[0])).map(([c]) => c);
+}
+
+/* Button group: one choice of a URL parameter. */
+const pills = (param, options, active, cls = "") =>
+  `<div class="seg seg-lg ${cls}" role="group" data-param="${param}">${options.map(([v, l]) =>
+    `<button type="button" data-value="${esc(v)}" aria-pressed="${v === active}">${esc(l)}</button>`).join("")}</div>`;
+
 function renderSales(main) {
   if (!S.hasInvoices) {
     main.innerHTML = `<section class="card"><div class="empty-state">${esc(t("sales.noInvoices"))}</div></section>`;
     return;
   }
   const p = current.params;
-  // currencies by total, the largest first; HUF preferred
-  const curTotals = new Map();
-  for (const i of S.invoices) addTo(curTotals, i.cur, Math.abs(cents(i.net)));
-  const currencies = [...curTotals.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  const currencies = currencyOrder();
   const pms = [...S.managers.keys()].filter((k) => k !== NONE).sort((a, b) => a.localeCompare(b, F.loc));
   const sortedSet = (key) => [...new Set(S.customers.map((c) => c[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, F.loc));
   const countries = [...new Set(S.customers.map((c) => c.country).filter(Boolean))].sort();
-  const plain = (param, options, value) => `<select data-param="${param}"${param === "r" ? ' data-clears="from,to"' : ""}>${options.map(([v, l]) =>
-    `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
   const range0 = salesRange(p);
-  let state = {};
 
-  filteredView(main, [
-    plain("r", [...RANGES.map((r) => [r, t("range." + r)]), ...(range0.preset === "custom" ? [["custom", t("range.custom")]] : [])], range0.preset),
-    fDate("from", "f.fromDate"), fDate("to", "f.toDate"),
-    plain("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || DEFAULT_GRAN[range0.preset]),
-    plain("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || "net"),
-    plain("cur", currencies.map((c) => [c, c]), currencies.includes(p.get("cur")) ? p.get("cur") : (currencies.includes("HUF") ? "HUF" : currencies[0])),
-    plain("by", BREAKDOWNS.map((b) => [b, t("by." + b)]), p.get("by") || "customer"),
-    fSearch("q", "f.searchCustomers"),
-    fSelect("pm", "f.allManagers", [...pms.map((k) => [k, k]), ...(S.managers.has(NONE) ? [[NONE, t("none")]] : [])]),
-    fSelect("region", "f.allRegions", sortedSet("regionLabel").map((r) => [r, r])),
-    fSelect("industry", "f.allIndustries", sortedSet("industryLabel").map((i) => [i, i])),
-    fSelect("country", "f.allCountries", countries.map((c) => [c, `${c} – ${F.country(c)}`])),
-  ].join(""), (host) => {
+  main.innerHTML = `<div class="sales-view" style="display:contents">
+    <section class="card sales-controls">
+      <div class="ctl-row">
+        <span class="ctl-label">${esc(t("sales.ctl.range"))}</span>
+        ${pills("r", RANGES.map((r) => [r, t("range." + r)]), range0.preset)}
+        <span class="ctl-dates">${fDate("from", "f.fromDate")}${fDate("to", "f.toDate")}</span>
+      </div>
+      <div class="ctl-row">
+        <span class="ctl-label">${esc(t("sales.gran"))}</span>
+        ${pills("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || DEFAULT_GRAN[range0.preset])}
+        <span class="ctl-label">${esc(t("sales.ctl.amount"))}</span>
+        ${pills("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || "net")}
+      </div>
+      <div class="filters">
+        ${fSearch("q", "f.searchCustomers")}
+        ${fSelect("pm", "f.allManagers", [...pms.map((k) => [k, k]), ...(S.managers.has(NONE) ? [[NONE, t("none")]] : [])])}
+        ${fSelect("region", "f.allRegions", sortedSet("regionLabel").map((r) => [r, r]))}
+        ${fSelect("industry", "f.allIndustries", sortedSet("industryLabel").map((i) => [i, i]))}
+        ${fSelect("country", "f.allCountries", countries.map((c) => [c, `${c} – ${F.country(c)}`]))}
+        <span class="spacer"></span>
+        <button type="button" class="secondary" data-act="reset">${esc(t("f.reset"))}</button>
+        <button type="button" data-act="export">${esc(t("f.export"))}</button>
+      </div>
+    </section>
+    <div class="results" style="display:contents"></div>
+  </div>`;
+  const view = main.firstElementChild, host = $(".results", view), controls = $(".sales-controls", view);
+  let state = {};
+  const draw = () => {
     state = drawSales(host, currencies);
-    // keep the dropdowns in step: custom dates -> "Egyedi időszak"; a preset sets its default breakdown
-    const sync = (param, value, label) => {
-      const sel = main.querySelector(`select[data-param="${param}"]`);
-      if (!sel) return;
-      if (![...sel.options].some((o) => o.value === value)) sel.add(new Option(label, value));
-      sel.value = value;
-    };
-    sync("r", state.preset, t("range.custom"));
-    sync("g", state.g);
-  }, () => {
-    exportCsv(`ertekesites_${state.g}`, [
-      { label: t("sales.col.period"), value: (r) => periodLabel(r.key, state.g) },
-      { label: t("sales.col.from"), value: (r) => periodStart(r.key, state.g) },
-      { label: `${t("sales.col.amount")} (${state.cur})`, value: (r) => r.v / 100 },
-      { label: `${t("sales.prevYear")} (${state.cur})`, value: (r) => r.prev / 100 },
-      { label: t("sales.col.count"), value: (r) => r.n },
-      { label: t("sales.col.credits"), value: (r) => r.credits },
-    ], state.periods);
-  }, { outside: true });
+    // reflect the effective choices (defaults, custom dates) on the buttons
+    controls.querySelectorAll('.seg[data-param="r"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.preset));
+    controls.querySelectorAll('.seg[data-param="g"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.g));
+  };
+  const set = (updates) => { setParams(updates); tablePage["sales-by"] = 0; draw(); };
+
+  // buttons: range, breakdown, amount, currency, "by"
+  view.addEventListener("click", (e) => {
+    const btn = e.target.closest(".seg[data-param] button, .cur-switch[data-param] button");
+    if (btn) {
+      const group = btn.closest("[data-param]"), param = group.dataset.param, value = btn.dataset.value;
+      if (param === "r") {
+        controls.querySelectorAll('input[data-param="from"], input[data-param="to"]').forEach((i) => { i.value = ""; });
+        set({ r: value, from: "", to: "", g: "" }); // a range brings its own default breakdown
+      } else set({ [param]: value });
+      group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b === btn));
+      return;
+    }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "reset") {
+      for (const k of [...current.params.keys()]) setParams({ [k]: "" });
+      route();
+    } else if (act === "export") {
+      exportCsv(`ertekesites_${state.g}_${state.cur}`, [
+        { label: t("sales.col.period"), value: (r) => periodLabel(r.key, state.g) },
+        { label: t("sales.col.from"), value: (r) => periodStart(r.key, state.g) },
+        { label: `${t("sales.col.amount")} (${state.cur})`, value: (r) => r.v / 100 },
+        { label: `${t("sales.prevYear")} (${state.cur})`, value: (r) => r.prev / 100 },
+        { label: t("sales.col.count"), value: (r) => r.n },
+        { label: t("sales.col.credits"), value: (r) => r.credits },
+      ], state.periods);
+    }
+  });
+  // search, dropdowns, custom dates
+  let timer;
+  controls.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.dataset.param) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => set({ [el.dataset.param]: el.value.trim() }), el.type === "search" ? 200 : 0);
+  });
+  draw();
 }
 
 function drawSales(host, currencies) {
@@ -1221,14 +1328,15 @@ function drawSales(host, currencies) {
 
   const keys = periodKeys(range.from, range.to, g);
   const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
-  const groups = new Map(), others = new Map();
+  const groups = new Map(), byCur = new Map();
   let total = 0, prevTotal = 0, count = 0, credits = 0, positive = 0;
   for (const i of S.invoices) {
     if (!i.date || !customerOk(i.c)) continue;
     const inRange = i.date >= range.from && i.date <= range.to;
     const inPrev = i.date >= pFrom && i.date <= pTo;
     if (!inRange && !inPrev) continue;
-    if (i.cur !== cur) { if (inRange) addTo(others, i.cur, amount(i)); continue; }
+    if (inRange) addTo(byCur, i.cur, amount(i));
+    if (i.cur !== cur) continue;
     const v = amount(i);
     const [gk, glabel, ghref] = breakdownKey(by, i);
     if (!groups.has(gk)) groups.set(gk, { key: gk, label: glabel, href: ghref, v: 0, prev: 0, n: 0 });
@@ -1245,48 +1353,56 @@ function drawSales(host, currencies) {
       prevTotal += v; grp.prev += v;
     }
   }
+  const others = new Map([...byCur].filter(([c, v]) => c !== cur && v));
   const periods = [...per.values()];
-  const delta = prevTotal ? (total - prevTotal) / Math.abs(prevTotal) : null;
   const big = (c) => { const x = F.compactParts(c / 100, cur); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
   const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const change = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
   const rangeText = `${F.date(range.from)} – ${F.date(range.to)}`;
+  const prevText = `${F.date(pFrom)} – ${F.date(pTo)}`;
 
   host.innerHTML = `
+    <section class="cur-switch" data-param="cur" role="group" aria-label="${esc(t("sales.ctl.currency"))}">
+      <span class="ctl-label">${esc(t("sales.ctl.currency"))}</span>
+      ${currencies.map((c) => `<button type="button" data-value="${esc(c)}" aria-pressed="${c === cur}">
+        <b>${esc(c)}</b><span>${byCur.get(c) ? esc(compactMoney(byCur.get(c) / 100, c)) : "–"}</span></button>`).join("")}
+      <span class="cur-hint">${esc(t("sales.curHint"))}</span>
+    </section>
     <section class="kpis">
       ${tile(t(amt === "gross" ? "sales.kpi.gross" : "sales.kpi.net"), big(total), esc(rangeText), true)}
-      ${tile(t("sales.kpi.prev"), big(prevTotal), delta == null ? esc(`${F.date(pFrom)} – ${F.date(pTo)}`) : `${change(total, prevTotal)} · ${esc(`${F.date(pFrom)} – ${F.date(pTo)}`)}`)}
+      ${tile(t("sales.kpi.prev"), big(prevTotal), prevTotal ? `${change(total, prevTotal)} · ${esc(prevText)}` : esc(prevText))}
       ${tile(t("sales.kpi.count"), esc(F.num(count)), esc(credits ? t("cust.creditCount", { n: F.num(credits) }) : ""))}
       ${tile(t("sales.kpi.avg"), count ? big(Math.round(positive / count)) : "–", esc(t("sales.kpi.avgSub")))}
     </section>
     ${others.size ? `<div class="notice">${esc(t("sales.otherCur", { list: moneyList(others) }))}</div>` : ""}
-    <section class="card chart">
-      <div class="card-head"><h2>${esc(t("sales.chart"))}</h2><span class="sub">${esc(`${t(amt === "gross" ? "sales.gross" : "sales.net")}, ${cur}`)}</span></div>
-      <div class="legend"><span><i style="background:var(--bar)"></i>${esc(rangeText)}</span><span><i style="background:var(--bar-muted)"></i>${esc(t("sales.prevYear"))}</span></div>
-      <div id="sales-chart"></div>
-    </section>
-    <section class="card">
-        <div class="card-head"><h2>${esc(t("sales.periods"))}</h2><span class="sub">${esc(t("gran." + g))}</span></div>
-        <div class="table-wrap plain" style="max-height:480px;overflow:auto"><table>
+    <div class="grid-2 sales-pair">
+      <section class="card chart">
+        <div class="card-head"><h2>${esc(t("sales.chart"))}</h2><span class="sub">${esc(`${t(amt === "gross" ? "sales.gross" : "sales.net")}, ${cur}`)}</span></div>
+        <div class="legend"><span><i style="background:var(--bar)"></i>${esc(rangeText)}</span><span><i style="background:var(--bar-muted)"></i>${esc(t("sales.prevYear"))}</span></div>
+        <div id="sales-chart"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>${esc(t("sales.periods"))}</h2><span class="sub">${esc(`${t("gran." + g)}, ${cur}`)}</span></div>
+        <div class="table-wrap plain periods"><table>
           <thead><tr><th>${esc(t("sales.col.period"))}</th><th class="num">${esc(t("sales.col.amount"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th class="num">${esc(t("sales.col.change"))}</th><th class="num">${esc(t("sales.col.count"))}</th></tr></thead>
           <tbody>${[...periods].reverse().map((r) => `<tr><td>${esc(periodLabel(r.key, g))}</td><td class="num">${esc(F.money(r.v / 100, cur))}</td>
             <td class="num muted">${esc(F.money(r.prev / 100, cur))}</td><td class="num">${change(r.v, r.prev)}</td><td class="num">${esc(F.num(r.n))}${r.credits ? ` <span class="muted">(−${r.credits})</span>` : ""}</td></tr>`).join("")}</tbody>
         </table></div>
       </section>
+    </div>
     <section class="card">
-        <div class="card-head"><h2>${esc(t("by." + by))}</h2><span class="sub">${esc(rangeText)}</span></div>
-        <div id="sales-by"></div>
-      </section>
-`;
+      <div class="card-head"><h2>${esc(t("sales.breakdown"))}</h2>${pills("by", BREAKDOWNS.map((b) => [b, t("byShort." + b)]), by)}</div>
+      <div id="sales-by"></div>
+    </section>`;
 
   drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: periods.map((r) => r.prev / 100),
-    cur, mode: "compare", label: t("sales.chart") });
+    cur, mode: "compare", label: t("sales.chart"), height: 240 });
   const rows = [...groups.values()].filter((r) => r.v || r.prev);
   drawTable($("#sales-by", host), {
     id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
     columns: [
       { key: "name", label: t("by." + by), value: (r) => r.label, html: (r) => (r.href ? `<a href="${r.href}">${esc(r.label)}</a>` : esc(r.label)), wrap: true },
-      { key: "amount", label: t("sales.col.amount"), num: true, value: (r) => r.v / 100, html: (r) => esc(F.money(r.v / 100, cur)) },
+      { key: "amount", label: `${t("sales.col.amount")} (${cur})`, num: true, value: (r) => r.v / 100, html: (r) => esc(F.money(r.v / 100, cur)) },
       { key: "share", label: t("sales.col.share"), num: true, value: (r) => (total ? r.v / total : 0), html: (r) => esc(F.pct(total ? r.v / total : 0)) },
       { key: "count", label: t("sales.col.count"), num: true, value: (r) => r.n },
       { key: "prev", label: t("sales.prevYear"), num: true, value: (r) => r.prev / 100, html: (r) => `<span class="muted">${esc(F.money(r.prev / 100, cur))}</span>` },
