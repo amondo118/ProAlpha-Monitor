@@ -146,33 +146,45 @@ def build(files, cfg):
     sources = {"customers": {"file": cname, "exported_at": stamp(found["vevok"]), "rows": len(customers),
                              "skipped_blocked": len(blocked), "managers": len(spellings)}}
 
-    # ---- Invoices: linked to customers by customer number ----
+    # ---- Invoice export: invoices and offers, linked to customers by number ----
     if "szamlak" in found:
         rows, w = datasets.parse(found["szamlak"], "szamlak", cfg)
         warnings += w
         name = found["szamlak"].name
         section = cfg["columns"]["szamlak"]
+        # Document types (BF): which count as sales, which are offers; the rest is skipped.
+        # Without a BF column every row is an invoice (older exports).
+        has_type = "origin" in section.get("oszlopok", {})
+        invoice_types = {t.strip().upper() for t in section.get("szamla_bf", ["R"])}
+        offer_types = {t.strip().upper() for t in section.get("ajanlat_bf", ["A"])}
         # Invoice types counted as negative (credit notes), compared without case/accents
         negative = {datasets.fold(k) for k in section.get("negativ_tipusok", ["Jóváírás"])}
-        invoices, by_key, of_blocked, orphans, merged = [], {}, 0, {}, 0
-        kinds, cancelled, raw_rows, skipped = {}, 0, len(rows), 0
+        clerks = {k.casefold(): v for k, v in cfg["codes"].get("ugyintezok", {}).items()}
+        invoices, offers, by_key, of_blocked, orphans, merged = [], [], {}, 0, {}, 0
+        kinds, types, cancelled, raw_rows, skipped = {}, {}, 0, len(rows), 0
+        skipped_types = 0
         for r in rows:
             line = r.pop("_line")
             if not r.get("id") or not r.get("customer_id"):
-                warnings.append(f"{name} line {line}: no invoice or customer number, row skipped")
+                warnings.append(f"{name} line {line}: no document or customer number, row skipped")
                 skipped += 1
                 continue
-            # One invoice can appear on several identical rows (a side effect of the
-            # export). The internal document ID identifies it; without it, the number.
-            key = r.get("doc_id") or r["id"]
+            # One document can appear on several identical rows (a side effect of the
+            # export). The internal document ID identifies it; without it, type + number.
+            key = r.get("doc_id") or f"{r.get('origin')}:{r['id']}"
             if key in by_key:
                 if by_key[key] == r:
                     merged += 1
                 else:
-                    warnings.append(f"{name} line {line}: invoice {r['id']} appears again with different values, row skipped")
+                    warnings.append(f"{name} line {line}: document {r['id']} appears again with different values, row skipped")
                     skipped += 1
                 continue
             by_key[key] = dict(r)
+            bf = (r.get("origin") or "").strip().upper()
+            types[bf or "–"] = types.get(bf or "–", 0) + 1
+            if has_type and bf not in invoice_types and bf not in offer_types:
+                skipped_types += 1  # e.g. delivery notes: their invoice is already counted
+                continue
             if id_key(r["customer_id"]) in blocked:
                 of_blocked += 1
                 continue
@@ -181,6 +193,11 @@ def build(files, cfg):
                 r["customer_id"] = customer["id"]  # the customer export's spelling of the number
             else:
                 orphans[r["customer_id"]] = orphans.get(r["customer_id"], 0) + 1
+            if r.get("clerk"):  # user name on the document -> Ügyintéző name, if paired
+                r["clerk"] = clerks.get(r["clerk"].strip().casefold(), r["clerk"].strip())
+            if has_type and bf in offer_types:
+                offers.append({f: r.get(f) for f in ("id", "customer_id", "date", "net", "currency", "currency_code", "clerk")})
+                continue
             kind = r.get("kind") or ""
             kinds[kind] = kinds.get(kind, 0) + 1
             if datasets.fold(kind) in negative:
@@ -191,19 +208,25 @@ def build(files, cfg):
             if (r.get("cancelled") or "").strip().lower() in ("igen", "i", "yes", "x"):
                 cancelled += 1
             # Keep the page's data small: drop what was only needed here
-            for f in ("doc_id", "kind", "cancelled", "origin"):
+            for f in ("doc_id", "kind", "cancelled"):
                 r.pop(f, None)
             if r.get("currency"):
                 r.pop("currency_code", None)
             if r.get("tax_date") == r.get("date"):
                 r["tax_date"] = None
             invoices.append(r)
+        for o in offers:
+            if o.get("currency"):
+                o.pop("currency_code", None)
         for cid, n in sorted(orphans.items()):
-            warnings.append(f"Invoices for unknown customer {cid}: {n} (not in the customer export)")
+            warnings.append(f"Documents for unknown customer {cid}: {n} (not in the customer export)")
         data["invoices"] = invoices
+        data["offers"] = offers
         sources["invoices"] = {"file": name, "exported_at": stamp(found["szamlak"]), "rows": len(invoices),
-                               "raw_rows": raw_rows, "skipped_rows": skipped, "skipped_blocked": of_blocked, "duplicates_merged": merged,
-                               "unmatched": sum(orphans.values()), "kinds": kinds, "cancelled_flagged": cancelled,
+                               "offers": len(offers), "raw_rows": raw_rows, "skipped_rows": skipped,
+                               "skipped_types": skipped_types, "skipped_blocked": of_blocked, "duplicates_merged": merged,
+                               "unmatched": sum(orphans.values()), "types": types, "invoice_types": sorted(invoice_types),
+                               "offer_types": sorted(offer_types), "kinds": kinds, "cancelled_flagged": cancelled,
                                "has_payments": "cleared" in section.get("oszlopok", {})}
     return data, sources, warnings
 
@@ -225,6 +248,8 @@ def control_totals(data):
             count[cur] = count.get(cur, 0) + 1
         out["invoices_by_currency"] = count
         out["net_cents_by_currency"] = net
+    if "offers" in data:
+        out["offers"] = sum(1 for o in data["offers"] if o["customer_id"] in ids and o.get("date"))
     return out
 
 
@@ -276,7 +301,10 @@ def run_import(files):
     OUT.mkdir(parents=True, exist_ok=True)
     write_atomic(OUT / "data.json", compact(data))
     write_atomic(OUT / "meta.json", meta)  # written last: its timestamp signals "new data ready"
-    summary = ", ".join(f"{k}: {v['rows']} ({v['skipped_blocked']} blocked skipped) from {v['file']}" for k, v in sources.items())
+    def describe(kind, v):
+        offers = f" + {v['offers']} offers" if "offers" in v else ""
+        return f"{kind}: {v['rows']}{offers} ({v['skipped_blocked']} blocked skipped) from {v['file']}"
+    summary = ", ".join(describe(k, v) for k, v in sources.items())
     log(f"Imported {summary}; {len(warnings)} warnings")
     for w in warnings[:10]:
         log(f"  warning: {w}")

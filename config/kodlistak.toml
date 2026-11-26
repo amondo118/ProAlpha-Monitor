@@ -94,3 +94,12 @@
 #   "U" = "Átutalás"
 #   "K" = "Készpénz"
 [fizetesi_modok]
+
+
+# Ügyintézők: a bizonylatok (ajánlatok, számlák) Ügyintéző oszlopában
+# felhasználónév állhat (pl. csikos.tamas), a vevőexportban pedig a vevő
+# ügyintézőjének neve. Ha a kettő eltér, itt párosítható, hogy az ajánlatok a
+# megfelelő ügyintézőhöz kerüljenek:
+#   "csikos.tamas" = "Csikós Tamás"
+# Ha mindkét exportban ugyanaz áll, nem kell semmit beírni.
+[ugyintezok]

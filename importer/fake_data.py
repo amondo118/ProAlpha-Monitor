@@ -143,7 +143,8 @@ def write_customers(path, count=1800, seed=11):
         put("Kiválasztás", name, every=True)
         put("Név", name)
         put("Keresőfogalom", search, every=True)
-        put("Ügyintéző", "" if r.random() < 0.04 else r.choices(MANAGERS, weights=range(12, 0, -1))[0])
+        manager = "" if r.random() < 0.04 else r.choices(MANAGERS, weights=range(12, 0, -1))[0]
+        put("Ügyintéző", manager)
         put("FelvDátum", created.strftime("%Y.%m.%d"), every=True)
         put("Adatrögzítő", r.choice(CLERKS), every=True)
         put("Orsz", country, every=True)
@@ -165,23 +166,29 @@ def write_customers(path, count=1800, seed=11):
         put("ISz", postal, every=True)
         put("MódDátum", today.strftime("%Y.%m.%d"), every=True)
         lines.append("\t".join(row))
-        out.append((cid, created, PN_TO_ISO[pn], terms))
+        out.append((cid, created, PN_TO_ISO[pn], terms, manager))
     Path(path).write_bytes(("\r\n".join(lines) + "\r\n").encode("cp1250"))
     return out
 
 
 def write_invoices(path, customers, columns, seed=12):
-    """Fake invoice header export in the real proALPHA format: comma-separated,
-    quoted Hungarian amounts, UTF-8, the column titles configured in
-    [szamlak.oszlopok] (a "#3" title gets 3 columns of that name, only the 3rd
-    filled). About 10% of the invoices appear twice (identical rows), as in the
-    real export, and ~3% are credit notes (SzlT = "Jóváírás", positive amounts)."""
+    """Fake document export in the real proALPHA format: comma-separated, quoted
+    Hungarian amounts, UTF-8, the column titles configured in [szamlak.oszlopok]
+    (a "#3" title gets 3 columns of that name, only the 3rd filled).
+
+    Mixed document types in the BF column, as in the real export:
+      R   invoices (most of them); ~3% credit notes (SzlT = "Jóváírás")
+      VFP a few, counted as sales
+      L   delivery notes: a copy of ~40% of the invoices (same amount) - must be skipped
+      A   offers: several per customer and year, by the customer's Ügyintéző
+      U   a few, skipped
+    About 10% of the documents appear twice (identical rows)."""
     import csv
+    import math
     r = random.Random(seed)
     today = date.today()
     start = date(today.year - 4, 1, 1)
     iso_to_pn = {"HUF": "0", "EUR": "1", "RON": "5", "CZK": "7", "SEK": "13"}
-    # header: configured columns (+ repeats for "#n"), plus a few unused ones
     header, slot = [], {}
     for field, spec in columns.items():
         name, _, n = spec.partition("#")
@@ -189,41 +196,56 @@ def write_invoices(path, customers, columns, seed=12):
         for k in range(1, n + 1):
             header.append(name)
         slot[field] = len(header) - 1
-    header += ["Címzett", "Nettó összeg 1", "Valutaárf."]
+    header += ["Címzett", "Nettó összeg 1"]
     rows = []
-    number = {"A": 0, "L": 0}
-    for cid, created, cur, terms in customers:
+    number = {"R": 11000000, "VFP": 0, "L": 0, "A": 0, "U": 0}
+
+    def emit(bf, d, cid, cur, net, gross, clerk, kind="Számla"):
+        number[bf] += r.randint(1, 3) if bf == "R" else 1
+        values = {
+            "doc_id": f"PA1106:z:{r.getrandbits(128):032x}", "id": str(number[bf]), "customer_id": cid,
+            "date": d.strftime("%Y.%m.%d"), "tax_date": d.strftime("%Y.%m.%d"),
+            "net": hu_amount(net), "gross": hu_amount(gross), "currency": iso_to_pn[cur],
+            "kind": kind, "cancelled": "Nem", "origin": bf, "clerk": clerk,
+        }
+        row = [""] * len(header)
+        for field, i in slot.items():
+            row[i] = values.get(field, "")
+        row[-2:] = ["", "0"]
+        rows.append(row)
+        if r.random() < 0.10:
+            rows.append(list(row))  # the same document twice, as in the real export
+
+    for cid, created, cur, terms, manager in customers:
+        clerk = manager or r.choice(CLERKS).lower()
+        first = max(created, start)
+        # offers: also for customers who never bought
+        d = first
+        per_year_offers = r.randint(1, 10)
+        while d <= today:
+            net = round(r.lognormvariate(14.5, 1.2) / RATE[cur], 0 if cur == "HUF" else 2)
+            emit("A", d, cid, cur, net, net, clerk)
+            d += timedelta(days=max(1, int(r.expovariate(per_year_offers / 365))))
         if r.random() < 0.45:
             continue  # customers without invoices
-        first = max(created, start)
         yearly = r.lognormvariate(16.2, 1.1)  # yearly net sales in HUF; a few large customers
         growth = r.uniform(0.9, 1.25)
         per_year = r.randint(3, 24)
         d = first
         while d <= today:
             years = (d - start).days / 365
-            season = 1 + 0.25 * __import__("math").sin((d.timetuple().tm_yday / 365) * 6.283)
+            season = 1 + 0.25 * math.sin((d.timetuple().tm_yday / 365) * 6.283)
             net = yearly * growth ** years * season / per_year * r.uniform(0.5, 1.5) / RATE[cur]
             net = round(net, 0 if cur == "HUF" else 2)
             domestic = cur == "HUF" or r.random() < 0.3
             gross = round(net * (1.27 if domestic else 1), 0 if cur == "HUF" else 2)
-            origin = "L" if r.random() < 0.2 else "A"
-            number[origin] += 1
-            kind = "Jóváírás" if r.random() < 0.03 else "Számla"
-            values = {
-                "doc_id": f"PA1106:z:{r.getrandbits(128):032x}", "id": str(number[origin]), "customer_id": cid,
-                "date": d.strftime("%Y.%m.%d"), "tax_date": d.strftime("%Y.%m.%d"),
-                "net": hu_amount(net), "gross": hu_amount(gross), "currency": iso_to_pn[cur],
-                "kind": kind, "cancelled": "Nem", "origin": origin, "clerk": r.choice(CLERKS).lower(),
-                "due": (d + timedelta(days=terms)).strftime("%Y.%m.%d"), "cleared": "",
-            }
-            row = [""] * len(header)
-            for field, i in slot.items():
-                row[i] = values.get(field, "")
-            row[-3:] = ["", "0", "1"]
-            rows.append(row)
-            if r.random() < 0.10:
-                rows.append(list(row))  # the same invoice twice, as in the real export
+            bf = "VFP" if r.random() < 0.03 else "R"
+            kind = "Jóváírás" if bf == "R" and r.random() < 0.03 else "Számla"
+            emit(bf, d, cid, cur, net, gross, clerk, kind)
+            if bf == "R" and kind == "Számla" and r.random() < 0.4:
+                emit("L", d, cid, cur, net, gross, clerk)  # its delivery note, same amount
+            if r.random() < 0.01:
+                emit("U", d, cid, cur, net, net, clerk)
             d += timedelta(days=max(1, int(r.expovariate(per_year / 365))))
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, quoting=csv.QUOTE_MINIMAL)

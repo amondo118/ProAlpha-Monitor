@@ -54,7 +54,9 @@ CODES = """
 """
 
 
-class ImporterTest(unittest.TestCase):
+class Base(unittest.TestCase):
+    """Shared setup and helpers (no tests of its own)."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
@@ -84,6 +86,9 @@ class ImporterTest(unittest.TestCase):
     def build(self, *paths):
         return importer.build(list(paths), self.cfg)
 
+
+
+class ImporterTest(Base):
     # ---- parsing ----
 
     def test_hungarian_numbers_and_dates(self):
@@ -201,7 +206,7 @@ class ImporterTest(unittest.TestCase):
         ])
         _, sources, _ = self.build(c, i)
         s = sources["invoices"]
-        self.assertEqual(s["raw_rows"], s["rows"] + s["skipped_rows"] + s["skipped_blocked"] + s["duplicates_merged"])
+        self.assertEqual(s["raw_rows"], s["rows"] + s["offers"] + s["skipped_rows"] + s["skipped_types"] + s["skipped_blocked"] + s["duplicates_merged"])
         self.assertEqual((s["rows"], s["skipped_rows"], s["skipped_blocked"], s["duplicates_merged"], s["unmatched"]), (2, 1, 1, 1, 1))
 
     def test_fake_exports_import_cleanly(self):
@@ -210,9 +215,60 @@ class ImporterTest(unittest.TestCase):
         data, sources, warnings = importer.build(files, cfg)
         self.assertEqual(warnings, [])
         s = sources["invoices"]
-        self.assertEqual(s["raw_rows"], s["rows"] + s["skipped_rows"] + s["skipped_blocked"] + s["duplicates_merged"])
+        self.assertEqual(s["raw_rows"], s["rows"] + s["offers"] + s["skipped_rows"] + s["skipped_types"] + s["skipped_blocked"] + s["duplicates_merged"])
+        self.assertGreater(s["offers"], 0)
+        self.assertTrue(set(s["types"]) >= {"R", "L", "A"})
         self.assertGreater(s["duplicates_merged"], 0)
         self.assertTrue(all(x["net"] < 0 for x in data["invoices"] if x.get("credit")))
+
+
+
+class DocumentTypeTest(Base):
+    """The real export mixes invoices, offers, delivery notes … in one file;
+    only the BF column tells them apart."""
+
+    def setUp(self):
+        super().setUp()
+        cols = COLUMNS.replace('kind = "SzlT"', 'kind = "SzlT"\norigin = "BF"\nclerk = "Ügyintéző"').replace(
+            'negativ_tipusok = ["Jóváírás"]', 'negativ_tipusok = ["Jóváírás"]\nszamla_bf = ["R", "VFP"]\najanlat_bf = ["A"]')
+        (self.dir / "oszlopok.toml").write_text(cols, encoding="utf-8")
+        (self.dir / "kodlistak.toml").write_text(CODES + '\n[ugyintezok]\n"csikos.tamas" = "Csikós Tamás"\n', encoding="utf-8")
+        self.cfg = datasets.load_config(self.dir)
+
+    def docs(self, rows):
+        return self.write("szamlak.csv", ["V_BelegKopf_Obj", "BizSz", "Vevő", "Bizonylatdátum", "Végösszeg", "Br. végösszeg", "Pn", "SzlT", "BF", "Ügyintéző"],
+                          rows, delimiter=",", encoding="utf-8")
+
+    def test_only_invoice_types_count_as_sales(self):
+        # customer 3000146 from the real sample: each invoice (R) has a delivery note (L) for the same amount
+        c = self.customers([["3000146", "Alfa Kft.", "ALFA", "Csikós Tamás", "0"]])
+        d = self.docs([
+            ["d1", "187", "3000146", "2026.08.19", "39.850,00", "50.610,00", "0", "Számla", "L", "csikos.tamas"],
+            ["d2", "11000200", "3000146", "2026.08.19", "39.850,00", "50.610,00", "0", "Számla", "R", "csikos.tamas"],
+            ["d3", "971", "3000146", "2026.11.02", "39.850,00", "50.610,00", "0", "Számla", "L", "csikos.tamas"],
+            ["d4", "11001355", "3000146", "2026.11.02", "39.850,00", "50.610,00", "0", "Számla", "R", "csikos.tamas"],
+            ["d5", "13", "3000146", "2026.08.19", "1.000,00", "1.270,00", "0", "Számla", "VFP", "csikos.tamas"],
+            ["d6", "86", "3000146", "2026.08.28", "500,00", "500,00", "0", "Számla", "U", "csikos.tamas"],
+            ["d7", "19", "3000146", "2026.06.19", "30.102.880,00", "30.102.880,00", "0", "Számla", "A", "csikos.tamas"],
+        ])
+        data, sources, warnings = self.build(c, d)
+        self.assertEqual(sorted(i["id"] for i in data["invoices"]), ["11000200", "11001355", "13"])
+        self.assertEqual(sum(i["gross"] for i in data["invoices"] if i["origin"] == "R"), 101220)  # proALPHA report: Aug + Nov 50 610
+        self.assertEqual([o["id"] for o in data["offers"]], ["19"])                              # the offer is not an invoice
+        s = sources["invoices"]
+        self.assertEqual((s["rows"], s["offers"], s["skipped_types"]), (3, 1, 3))                # L, L, U skipped
+        self.assertEqual(s["types"], {"L": 2, "R": 2, "VFP": 1, "U": 1, "A": 1})
+        self.assertEqual(warnings, [])
+
+    def test_clerk_user_names_are_paired_with_manager_names(self):
+        c = self.customers([["1", "Alfa Kft.", "ALFA", "Csikós Tamás", "0"]])
+        d = self.docs([
+            ["d1", "5", "1", "2026.06.08", "100,00", "127,00", "0", "Számla", "A", "csikos.tamas"],
+            ["d2", "6", "1", "2026.06.09", "100,00", "127,00", "0", "Számla", "A", "CSIKOS.TAMAS"],
+            ["d3", "7", "1", "2026.06.10", "100,00", "127,00", "0", "Számla", "A", "kzs"],
+        ])
+        data, _, _ = self.build(c, d)
+        self.assertEqual([o["clerk"] for o in data["offers"]], ["Csikós Tamás", "Csikós Tamás", "kzs"])
 
 
 if __name__ == "__main__":

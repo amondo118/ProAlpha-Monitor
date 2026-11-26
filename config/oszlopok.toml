@@ -61,14 +61,25 @@ postal_code      = "ISz"               # 2 ISz oszlop van; az első a cím irán
 
 
 # -----------------------------------------------------------------------------
-#  Számlák export (számlafejek)
+#  Számlák export (bizonylatfejek)
 # -----------------------------------------------------------------------------
-#  Egy sor = egy számla. A számlák a vevőszám alapján kapcsolódnak a vevőkhöz.
+#  Egy sor = egy bizonylat. A bizonylatfajtát a BF oszlop adja meg; az export
+#  számlákat, ajánlatokat, szállítóleveleket stb. vegyesen tartalmaz.
+#  A bizonylatok a vevőszám alapján kapcsolódnak a vevőkhöz.
 #  Ugyanaz a számla az exportban többször is szerepelhet (azonos sorokként):
 #  ezeket a belső bizonylatazonosító (doc_id) alapján egyszer számolja.
 #  Később a számlatételek (cikkek) egy új szakasszal adhatók hozzá.
 [szamlak]
 felismeres = ["id", "customer_id", "date", "net"]
+
+# Bizonylatfajták (BF oszlop):
+#   szamla_bf  – forgalomként számít (R = számla, VFP)
+#   ajanlat_bf – ajánlat: csak darabszám és lista ügyintézőnként, sosem forgalom
+#   minden más kimarad (pl. L = szállítólevél, mert a számlája már benne van; U)
+#   Az Import állapota fülön látszik, melyik fajtából mennyi érkezett.
+szamla_bf  = ["R", "VFP"]
+ajanlat_bf = ["A"]
+
 # Ezek a számlatípusok (SzlT) negatív előjellel számítanak (jóváírás).
 # Az Import állapota fülön látszik, milyen típusok érkeztek az exportban.
 negativ_tipusok = ["Jóváírás"]
@@ -84,8 +95,8 @@ gross           = "Br. végösszeg"      # bruttó végösszeg
 currency        = "Pn"                 # kód → pénznem: kodlistak.toml [penznemek]
 kind            = "SzlT"               # számlatípus (Számla, Jóváírás, …)
 cancelled       = "Sto"                # sztornózva (Igen/Nem)
-origin          = "BF"                 # A = rendelésből, L = szállítólevélből
-clerk           = "Ügyintéző"          # a számlát kiállító felhasználó
+origin          = "BF"                 # bizonylatfajta: R = számla, A = ajánlat, L = szállítólevél, …
+clerk           = "Ügyintéző"          # a bizonylatot kiállító felhasználó (párosítás: kodlistak.toml [ugyintezok])
 # Fizetési adat (kiegyenlítés dátuma) nincs a számlafej-exportban, ezért a
 # nyitott számlák nézet ki van kapcsolva. Ha lesz ilyen oszlop:
 # cleared       = "…"

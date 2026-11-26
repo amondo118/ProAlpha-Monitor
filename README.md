@@ -89,34 +89,46 @@ The layout is saved per table in the browser; "Oszlopok alaphelyzetbe" resets it
 CSV export uses the displayed column order. The theme switch (Automatikus / Világos /
 Sötét) is next to the language switch.
 
-## The invoice export (proALPHA invoice headers)
+## The invoice export (proALPHA document headers)
 
-One row = one invoice header. Columns used (see `[szamlak]` in `config/oszlopok.toml`):
+One row = one document. The export mixes document types; only the **BF** column
+tells them apart (the SzlT column says "Számla" on every row):
+
+| BF | Document | Used as |
+|---|---|---|
+| R | invoice | **sales** |
+| VFP | (as agreed) | **sales** |
+| A | offer | **offers**: counted per Ügyintéző (how many, to whom); never sales |
+| L | delivery note | skipped – its invoice (R, same amount) is already counted |
+| U, others | | skipped |
+
+The lists are `szamla_bf` and `ajanlat_bf` in `[szamlak]` of `config/oszlopok.toml`;
+the ⚠ status tab shows how many documents of each type arrived and what was done
+with them. Checked against proALPHA's own report for customer 3000146: the R invoices
+match it exactly; counting the delivery notes too would have doubled the amounts.
+
+Other columns used (see `[szamlak.oszlopok]`):
 
 | CSV column | Field | Notes |
 |---|---|---|
-| V_BelegKopf_Obj | `doc_id` | internal document ID. The export repeats some invoices on identical rows; they are merged by this ID (count shown on the ⚠ status tab) |
-| BizSz | `id` | invoice number |
-| Vevő | `customer_id` | links the invoice to the customer |
+| V_BelegKopf_Obj | `doc_id` | internal document ID: the export repeats some documents on identical rows; they count once |
+| BizSz | `id` | document number |
+| Vevő | `customer_id` | links the document to the customer (leading zeros don't matter) |
 | Bizonylatdátum | `date` | decides the period. For the date of supply use `"Adódátum#3"` |
-| Végösszeg / Br. végösszeg | `net` / `gross` | net = gross / 1.27 for domestic customers, equal for EU reverse charge |
+| Végösszeg / Br. végösszeg | `net` / `gross` | |
 | Pn | `currency` | same code list as the customer export |
-| SzlT | `kind` | invoice type. Types listed in `negativ_tipusok` (default "Jóváírás") count negative |
-| Sto | `cancelled` | counted on the status tab |
-| BF, Ügyintéző | `origin`, `clerk` | A = from an order, L = from a delivery note; the issuing user |
+| SzlT | `kind` | types listed in `negativ_tipusok` (default "Jóváírás") count negative |
+| Ügyintéző | `clerk` | the user who issued the document (e.g. `csikos.tamas`). Offers go to this Ügyintéző; pair user names with the customer export's names in `[ugyintezok]` of `config/kodlistak.toml` if they differ |
 
-- The exchange rate column (Valutaárf.) is always 1, so currencies are never converted:
-  every total is per currency.
-- The export has no payment data, so open invoices are switched off (the customer page
-  shows the latest invoices instead). With a payment-date column, add `cleared = "…"`.
-- Invoices of blocked or unknown customers are skipped and reported.
-- Invoice lines / articles (later): add a `szamlatetelek` entry to `FIELDS` in
-  `importer/datasets.py` and a matching section in `oszlopok.toml`.
+- Currencies are never added together; every total is per currency.
+- The export has no payment data, so open invoices are switched off (the customer
+  page shows the latest invoices instead).
+- Documents of blocked or unknown customers are skipped and reported.
 
 ## How the numbers are verified
 
 1. **Automated tests** for the importer (parsing, matching, duplicates, credit notes,
-   blocked customers, exact totals, row accounting):
+   blocked customers, document types, offers, exact totals, row accounting):
    ```bash
    docker compose run --rm importer python -m unittest -v
    ```
@@ -124,7 +136,8 @@ One row = one invoice header. Columns used (see `[szamlak]` in `config/oszlopok.
    (exact, in cents) to `meta.json`. The page recomputes them on its own: from the
    invoices, via the customers, via the Ügyintézők and period by period (every invoice in
    exactly one week/month/quarter/half/year), and checks that every invoice row is
-   accounted for (invoices + invalid + blocked customers' + duplicates = rows in the file).
+   accounted for (invoices + offers + skipped types + invalid + blocked customers' + duplicates
+   = rows in the file), and that every offer belongs to exactly one Ügyintéző.
    The results are on the ⚠ status tab ("Ellenőrzések"); any mismatch turns the icon red.
 3. **Matching rules:** customer numbers match regardless of leading zeros
    (`0003000048` = `3000048`); Ügyintéző names that differ only in case or spacing are one
