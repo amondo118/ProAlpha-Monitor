@@ -133,7 +133,7 @@ async function poll() {
   try {
     const meta = await fetchJson("data/meta.json");
     if (!S.meta || meta.generated_at !== S.meta.generated_at) await load();
-    else renderFreshness();
+    else { renderFreshness(); renderTabs(); } // staleness changes with time
   } catch { /* keep showing the last good data */ }
 }
 
@@ -224,7 +224,7 @@ function customerStats(c) {
 
 /* ---------- routing & URL state ---------- */
 
-const VIEWS = ["overview", "managers", "customers", "customer"];
+const VIEWS = ["overview", "managers", "customers", "customer", "status"];
 const TABS = ["overview", "managers", "customers"];
 let current = { view: "overview", params: new URLSearchParams() };
 let viewUpdate = null;
@@ -251,7 +251,7 @@ function route() {
   const main = $("#view");
   main.innerHTML = "";
   viewUpdate = null;
-  ({ overview: renderOverview, managers: renderManagers, customers: renderCustomers, customer: renderCustomer })[current.view](main);
+  ({ overview: renderOverview, managers: renderManagers, customers: renderCustomers, customer: renderCustomer, status: renderStatus })[current.view](main);
   const open = current.params.get("open");
   if (open) openDetail(open, false);
   else if ($("#detail").open) $("#detail").close();
@@ -277,10 +277,29 @@ function renderChrome() {
   renderBanner();
 }
 
+const WARN_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 2.5 20h19L12 3.5z" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.6" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.2" fill="currentColor"/></svg>`;
+
 function renderTabs() {
   const active = current.view === "customer" ? "customers" : current.view;
+  const st = importStatus();
+  const label = st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: st.count }) : t("status.ok");
   $("#tabs").innerHTML = TABS.map((v) =>
-    `<a href="#${v}"${v === active ? ' aria-current="page"' : ""}>${esc(t("nav." + v))}</a>`).join("");
+    `<a href="#${v}"${v === active ? ' aria-current="page"' : ""}>${esc(t("nav." + v))}</a>`).join("") +
+    `<a href="#status" class="tab-icon${st.stale ? " bad" : st.count ? " warn" : ""}"${active === "status" ? ' aria-current="page"' : ""}
+      title="${esc(`${t("nav.status")}: ${label}`)}" aria-label="${esc(`${t("nav.status")}: ${label}`)}">${WARN_ICON}${
+      st.count || st.stale ? `<span class="count">${st.stale && !st.count ? "!" : esc(F.num(st.count))}</span>` : ""}</a>`;
+}
+
+/* Import health: warning count and whether the export is overdue. */
+function importStatus() {
+  const m = S.meta;
+  if (!m) return { count: 0, stale: false, hours: 0 };
+  const exported = new Date(m.exported_at || m.generated_at);
+  const hours = (Date.now() - exported) / 3600000;
+  const allowed = CONFIG.staleHours + (CONFIG.exportsOnWeekends ? 0 : 24 * weekendDaysBetween(exported, new Date()));
+  return { count: m.warning_count || 0, stale: !m.fake && hours > allowed, hours };
 }
 
 function agoText(ms) {
@@ -308,16 +327,12 @@ function weekendDaysBetween(from, to) {
   return n;
 }
 
+/* Only the sample-data notice is shown on top. Warnings and stale data live in
+   the status tab (the "!" icon at the right end of the tab bar). */
 function renderBanner() {
   const m = S.meta;
   if (!m) return;
-  const exported = new Date(m.exported_at || m.generated_at);
-  const hours = (Date.now() - exported) / 3600000;
-  const allowed = CONFIG.staleHours + (CONFIG.exportsOnWeekends ? 0 : 24 * weekendDaysBetween(exported, new Date()));
-  if (hours > allowed && !m.fake) showBanner(t("banner.stale", { n: Math.round(hours) }), true);
-  else if (m.warning_count) {
-    showBanner(t("banner.warnings", { n: m.warning_count, list: m.warnings.slice(0, 3).join("; ") + (m.warning_count > 3 ? " …" : "") }));
-  } else if (m.fake) showBanner(t("fakeNotice"));
+  if (m.fake) showBanner(t("fakeNotice"));
   else $("#banner").hidden = true;
 }
 
@@ -844,6 +859,55 @@ function drawYears(host, c) {
     svg += `<rect class="band" x="${m.l + bw * k}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(`${yr}\n${F.money(vals[k], st.cur)}`)}"/>`;
   });
   host.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t("cust.revenueByYear"))}">${svg}</svg>`;
+}
+
+/* ---------- import status page ---------- */
+
+function renderStatus(main) {
+  const m = S.meta;
+  const st = importStatus();
+  const exported = new Date(m.exported_at || m.generated_at), imported = new Date(m.generated_at);
+  const src = m.sources || {};
+  const blocked = src.customers?.skipped_blocked || 0, blockedInv = src.invoices?.skipped_blocked || 0;
+  const stateText = st.stale ? t("status.stale") : st.count ? t("status.warnings", { n: F.num(st.count) }) : t("status.okShort");
+  const stateCls = st.stale ? "delta-down" : st.count ? "" : "status-ok";
+  const tile = (label, value, sub, hl = false) =>
+    `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${esc(sub)}</div></div>`;
+  const shown = m.warnings || [];
+  const cfgRows = Object.entries(m.config || {}).map(([name, path]) => `<div><dt class="mono">${esc(name)}</dt>
+    <dd class="${path.includes("config.example") ? "none" : ""}">${esc(path.includes("config.example") ? t("status.configDefault") : t("status.configOwn"))}</dd></div>`).join("");
+
+  main.innerHTML = `
+    <section class="kpis">
+      ${tile(t("status.state"), `<span class="${stateCls}">${esc(stateText)}</span>`, st.stale ? t("banner.stale", { n: Math.round(st.hours) }) : "", true)}
+      ${tile(t("status.exported"), esc(F.date(isoDate(exported))), `${F.dateTime(exported)} · ${agoText(Date.now() - exported)}`)}
+      ${tile(t("status.imported"), esc(F.date(isoDate(imported))), `${F.dateTime(imported)} · ${agoText(Date.now() - imported)}`)}
+      ${tile(t("status.blocked"), esc(F.num(blocked)), blockedInv ? t("status.blockedInv", { n: F.num(blockedInv) }) : "")}
+    </section>
+    <div class="cust-grid">
+      <section class="card">
+        <div class="card-head"><h2>${esc(t("status.warningsTitle"))} (${esc(F.num(st.count))})</h2>
+          ${shown.length > 8 ? `<input type="search" id="warn-filter" class="mono" placeholder="${esc(t("status.filter"))}" style="border:1px solid var(--border);border-radius:8px;padding:6px 10px;background:var(--surface)">` : ""}</div>
+        ${st.stale ? `<div class="notice bad" style="margin-bottom:12px">${esc(t("banner.stale", { n: Math.round(st.hours) }))}</div>` : ""}
+        ${shown.length ? `<ul class="warn-list" id="warn-list">${shown.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+          ${st.count > shown.length ? `<div class="card-foot">${esc(t("status.more", { n: F.num(st.count - shown.length) }))}</div>` : ""}`
+          : `<div class="empty-state">${esc(t("status.noWarnings"))}</div>`}
+        <div class="card-foot">${esc(t("status.log"))} <code class="mono">docker compose logs importer</code></div>
+      </section>
+      <div class="stack">
+        <section class="card">
+          <div class="card-head"><h2>${esc(t("status.sources"))}</h2></div>
+          <dl class="rows">${["customers", "invoices"].map((k) => src[k] ? `<div><dt>${esc(t("status.ds." + k))}<br><span class="mono muted">${esc(src[k].file)}</span></dt>
+            <dd>${esc(t("status.rows", { n: F.num(src[k].rows) }))}<br><span class="muted" style="font-weight:400">${esc(F.dateTime(new Date(src[k].exported_at)))}</span></dd></div>`
+            : `<div><dt>${esc(t("status.ds." + k))}</dt><dd class="none">${esc(t("status.noExport"))}</dd></div>`).join("")}</dl>
+        </section>
+        ${cfgRows ? `<section class="card"><div class="card-head"><h2>${esc(t("status.config"))}</h2></div><dl class="rows">${cfgRows}</dl></section>` : ""}
+      </div>
+    </div>`;
+  $("#warn-filter")?.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll("#warn-list li").forEach((li) => { li.hidden = q && !li.textContent.toLowerCase().includes(q); });
+  });
 }
 
 /* ---------- global search (top bar) ---------- */

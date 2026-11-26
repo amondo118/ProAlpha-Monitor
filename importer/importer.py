@@ -172,7 +172,7 @@ def run_import(files):
         "exported_at": sources["customers"]["exported_at"],
         "fake": fake,
         "sources": sources,
-        "warnings": warnings[:50],
+        "warnings": warnings[:500],
         "warning_count": len(warnings),
     }
     OUT.mkdir(parents=True, exist_ok=True)

@@ -77,6 +77,7 @@ the raw code without warnings.
 | Ügyintézők | Per Ügyintéző: customers, share, new, foreign, last new customer (+ sales / open invoices once invoices exist) |
 | Vevők | All customers with filters (Ügyintéző, country, region, industry, created date, search) and CSV export |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
+| ⚠ tab (right end of the tab bar) | Import status: warnings from the last import (searchable), stale-data alert, data sources with row counts, skipped blocked customers. The icon is grey when all is well, amber with a count when there are warnings, red when the export is overdue |
 
 Filters, sorting and the open customer are in the URL: links can be shared and bookmarked.
 
@@ -105,11 +106,11 @@ page expands them on load. 40 000 invoices ≈ 1 MB over the network.
 - IDs stay text (leading zeros survive). Amounts are parsed exactly (Decimal) and
   summed in the browser as integer cents, only within the same currency.
 - Rows without a key, duplicates, unreadable dates/amounts and unknown codes are
-  reported with file name and line number (banner on the page + importer log).
+  reported with file name and line number (⚠ status tab + importer log).
 - Each export is a full snapshot; with several files of one kind the newest wins.
 - Files changed in the last 60 s are not read yet (`STABLE_SECONDS`), so a file SAP is
   still writing is never imported half-finished.
-- The page warns when the export is older than 30 hours, not counting weekends.
+- The ⚠ status tab turns red when the export is older than 30 hours, not counting weekends.
 
 ## Known limitations
 
