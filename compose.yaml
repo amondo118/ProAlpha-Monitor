@@ -1,0 +1,30 @@
+# Shared setup for development and production.
+#   Development (Fedora):    docker compose up --build
+#                            (compose.override.yaml is merged in automatically)
+#   Production (AlmaLinux):  docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+
+name: sap-dashboard
+
+services:
+  web:
+    build: ./web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      # Clean data written by the importer, served at /data/
+      - dashboard-data:/srv/data:ro
+
+  importer:
+    build: ./importer
+    environment:
+      IMPORT_INTERVAL: "${IMPORT_INTERVAL:-60}"   # seconds between checks for new exports
+      CONFIG_DIR: /app/config
+    volumes:
+      # Hand-edited column names and code lists. Changes are picked up automatically.
+      - ./config:/app/config:ro,z
+      # SAP export files land here. Lowercase "z" = SELinux label shared between containers.
+      - "${EXPORTS_DIR:-./exports}:/exports:ro,z"
+      - dashboard-data:/data
+
+volumes:
+  dashboard-data:

@@ -1,0 +1,81 @@
+# =============================================================================
+#  OSZLOPCÍMEK – ezt a fájlt kézzel szerkesztheti
+# =============================================================================
+#
+#  Bal oldalon a program mezőneve áll (NE módosítsa),
+#  jobb oldalon az SAP export oszlopcíme idézőjelben (ezt írja át, ha kell).
+#
+#  - Kis- és nagybetű, valamint a felesleges szóközök nem számítanak.
+#  - Ha egy oszlopcím többször szerepel az exportban, a #2, #3 … utótaggal
+#    választhat: "FelvDátum#2" = a második "FelvDátum" oszlop. Utótag nélkül
+#    mindig az elsőt használja.
+#  - Ha egy mezőre nincs szükség, tegyen elé # jelet (megjegyzés lesz).
+#  - Mentés után az importáló egy percen belül újra beolvassa az adatokat.
+#    Ha hibás a fájl, a hibaüzenet a naplóban látszik:  docker compose logs importer
+#
+#  Minden exportfajtát a "felismeres" oszlopai alapján ismer fel: ha egy CSV
+#  fájlban ezek mind megvannak, akkor az az export.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+#  Zárolt vevők kihagyása
+# -----------------------------------------------------------------------------
+#  Ha a vevő neve vagy keresőfogalma tartalmazza a felsorolt jelzők bármelyikét,
+#  a vevő kimarad az importból. Kis/nagybetű és ékezet nem számít, tehát a
+#  "ZÁROLT" jelző a "zárolt", "Zarolt", "*ZAROLT*" írásmódot is kiszűri.
+#  A kihagyott vevők számlái is kimaradnak.
+[zarolt]
+jelzok = ["ZÁROLT"]
+
+
+# -----------------------------------------------------------------------------
+#  Vevők export
+# -----------------------------------------------------------------------------
+[vevok]
+felismeres = ["id", "name"]
+
+[vevok.oszlopok]
+id               = "Vevő"
+name             = "Kiválasztás"       # ha a Név oszlop a pontos cégnév: "Név"
+search_term      = "Keresőfogalom"
+account_manager  = "Ügyintéző"
+created          = "FelvDátum"         # 4 FelvDátum oszlop van – ellenőrizze, melyik a vevőé (#2, #3, #4)
+country          = "Orsz"
+region           = "Régió"             # kód → név: kodlistak.toml [regiok]
+industry         = "Ágazat"            # kód → név: kodlistak.toml [agazatok]
+currency         = "Pn"                # kód → pénznem: kodlistak.toml [penznemek]
+payment_terms    = "FizE"              # fizetési esedékesség napokban (1 = 1 nap)
+payment_method   = "FizM"              # kód → név: kodlistak.toml [fizetesi_modok]
+association      = "Társulás"
+group            = "Konszern"
+tax_number       = "Belföldi adószám"
+eu_vat_number    = "Közösségi adószám"
+supplier_id      = "Szállítói szám"
+email            = "E-mail"
+phone            = "Telefon"
+street           = "Utca"
+house_number     = "Házszám"
+city             = "Város"
+postal_code      = "ISz"               # 2 ISz oszlop van; az első a cím irányítószáma
+
+
+# -----------------------------------------------------------------------------
+#  Számlák export – MÉG NINCS VALÓDI EXPORT
+# -----------------------------------------------------------------------------
+#  Az alábbi oszlopcímek PÉLDÁK (a tesztadatok ezeket használják). Amikor
+#  megérkezik a valódi számla-export, írja át őket a valódi oszlopcímekre.
+#  A számlák a vevőszám alapján kapcsolódnak a vevőkhöz.
+#  Később a számlatételek (cikkek) ugyanígy, egy új szakasszal adhatók hozzá.
+[szamlak]
+felismeres = ["id", "customer_id", "date", "net"]
+
+[szamlak.oszlopok]
+id           = "Számlaszám"
+customer_id  = "Vevő"
+date         = "Számla kelte"
+due          = "Esedékesség"           # ha nincs: számla kelte + a vevő FizE napjai (becslés)
+net          = "Nettó érték"
+gross        = "Bruttó érték"
+currency     = "Pénznem"               # ISO kód (HUF) vagy Pn szám­kód is lehet
+cleared      = "Kiegyenlítés dátuma"   # üres = nyitott számla

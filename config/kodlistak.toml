@@ -1,0 +1,95 @@
+# =============================================================================
+#  KÓDLISTÁK – ezt a fájlt kézzel szerkesztheti
+# =============================================================================
+#
+#  Formátum:   "kód" = "megnevezés"
+#  - A kód elején álló nullák nem számítanak: "05" és "5" ugyanaz.
+#  - Ha az exportban olyan kód van, ami itt nem szerepel, az oldalon maga a kód
+#    látszik, és az importáló figyelmeztet rá (kódonként egyszer).
+#  - Mentés után az importáló egy percen belül újra beolvassa az adatokat.
+# =============================================================================
+
+
+# Pn: pénznemkulcs → ISO pénznemkód (az SAP táblában szereplő ország megjegyzésben)
+[penznemek]
+"0"  = "HUF"   # HU
+"1"  = "EUR"   # DE
+"2"  = "USD"   # US
+"3"  = "GBP"   # GB
+"4"  = "PLN"   # PL
+"5"  = "RON"   # RO
+"6"  = "EUR"   # BG – Bulgária 2026. január 1. óta eurót használ (előtte BGN). Ellenőrizze!
+"7"  = "CZK"   # CZ
+"8"  = "CNY"   # CN
+"9"  = "CHF"   # CH
+"10" = "HKD"   # HK
+"11" = "DKK"   # DK
+"12" = "RSD"   # RS
+"13" = "SEK"   # SE
+"14" = "TRY"   # TR
+"15" = "INR"   # IN
+"16" = "RUB"   # RU
+"17" = "NOK"   # NO
+
+
+# Ágazat
+[agazatok]
+"0"  = "PFM"
+"1"  = "Autóipar"
+"2"  = "Édesipar"
+"3"  = "Egészségipar"
+"4"  = "Elektronikaipar"
+"5"  = "Élelmiszeripar"
+"6"  = "Építőipar"
+"7"  = "Gépipar"
+"8"  = "Hűtőipar"
+"9"  = "Logisztika"
+"10" = "Mezőgazdaság"
+"11" = "Műanyagipar"
+"80" = "Továbbértékesítés"
+"90" = "Egyéb"
+
+
+# Régió
+[regiok]
+"0"  = "PFM"
+"1"  = "Bács-Kiskun"
+"2"  = "Baranya"
+"3"  = "Békés"
+"4"  = "Borsod-Abaúj-Zemplén"
+"5"  = "Csongrád-Csanád"
+"6"  = "Fejér"
+"7"  = "Győr-Moson-Sopron"
+"8"  = "Hajdú-Bihar"
+"9"  = "Heves"
+"10" = "Jász-Nagykun-Szolnok"
+"11" = "Komárom-Esztergom"
+"12" = "Nógrád"
+"13" = "Pest"
+"14" = "Somogy"
+"15" = "Szabolcs-Szatmár-Bereg"
+"16" = "Tolna"
+"17" = "Vas"
+"18" = "Veszprém"
+"19" = "Zala"
+"20" = "Ázsia"
+"21" = "Balkán"
+"22" = "Benelux"
+"23" = "Budapest-Buda"
+"24" = "Budapest-Pest"
+"25" = "DACH"
+"26" = "Dél-Amerika"
+"27" = "Franciaország"
+"28" = "Ibéria"
+"29" = "Kelet-Európa"
+"30" = "Olaszország"
+"31" = "Románia"
+"32" = "Skandináv"
+"33" = "Törökország"
+
+
+# FizM: fizetési mód. Amíg ez a lista üres, az oldalon a nyers kód látszik
+# (figyelmeztetés nélkül). Töltse ki az SAP táblából, például:
+#   "U" = "Átutalás"
+#   "K" = "Készpénz"
+[fizetesi_modok]

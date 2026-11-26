@@ -1,0 +1,122 @@
+# Vevői irányítópult (Customer Dashboard)
+
+Read-only dashboard for the daily SAP exports: customers now, invoices next,
+invoice lines (articles) later. Hungarian by default, English via the language
+switch. Everything runs in Docker; the host needs only Docker and Git.
+
+```
+daily SAP CSV snapshots ──► importer (Python) ──► data.json + meta.json ──► nginx ──► browser
+   ./exports                  │  reads config/*.toml        shared volume
+                              │  recognises each export by its columns
+   ./config  (hand-edited) ───┘  filters "zárolt", links invoices → customers
+```
+
+## Run it (development, Fedora)
+
+```bash
+sudo systemctl start docker
+docker compose up --build
+```
+
+Open http://localhost:8080. With `./exports` empty, the importer generates fake
+exports in the real format (customers + invoices) and imports them with the real
+code. The page shows a **MINTA** tag and a notice.
+
+- Real exports: copy the CSV files into `./exports/`; they are imported about a minute later.
+- Edit `config/*.toml`: the importer notices and re-imports within a minute (no rebuild).
+- Frontend files (`web/public/`) are mounted live: edit, refresh the browser.
+- Importer code changes: `docker compose up --build importer`
+- Log and warnings: `docker compose logs importer`
+- Look at the fake exports: `python3 importer/fake_data.py some_folder`
+
+## Deploy (production, AlmaLinux)
+
+```bash
+git clone <repo-url> /srv/dashboard
+cd /srv/dashboard
+cp .env.example .env    # set EXPORTS_DIR to the folder SAP writes the CSV files to
+docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+```
+
+The `config/` folder is mounted from the checkout, so it can be edited on the server.
+
+## The two hand-edited files
+
+### `config/oszlopok.toml` – which CSV column feeds which field
+
+```toml
+[vevok.oszlopok]
+id      = "Vevő"
+name    = "Kiválasztás"
+created = "FelvDátum"      # "FelvDátum#2" = the second column with this title
+```
+
+- Left side: the program's field name (do not change). Right side: the SAP column title.
+- Repeated titles (the customer export has 4 × FelvDátum, 2 × ISz, …): `#2`, `#3` picks
+  that occurrence; without a suffix the first one is used.
+- `felismeres`: the columns that identify the export. A CSV that has all of them is that export.
+- `[zarolt] jelzok`: customers whose name or search term contains any marker are left
+  out, together with their invoices. Case and accents are ignored ("ZÁROLT" also
+  matches "zarolt", "*Zárolt*").
+- A mistake in the file (syntax, unknown field name) stops the import with a clear
+  message in the log; the last good data stays online.
+
+### `config/kodlistak.toml` – code → name lists
+
+`[penznemek]` (Pn → ISO currency), `[agazatok]`, `[regiok]`, `[fizetesi_modok]`.
+Leading zeros don't matter ("05" = "5"). An unknown code is shown as the code
+(dashed underline) and reported once per code. An empty list (FizM for now) shows
+the raw code without warnings.
+
+## What the page shows
+
+| View | Content |
+|---|---|
+| Top bar | Search by customer number or name (suggestions; Enter opens the customer), data date, MINTA tag |
+| Áttekintés | Customers, new customers (30 days / year to date), without Ügyintéző, foreign; new per month; by Ügyintéző, industry, region, country; latest |
+| Ügyintézők | Per Ügyintéző: customers, share, new, foreign, last new customer (+ sales / open invoices once invoices exist) |
+| Vevők | All customers with filters (Ügyintéző, country, region, industry, created date, search) and CSV export |
+| Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
+
+Filters, sorting and the open customer are in the URL: links can be shared and bookmarked.
+
+## Invoices and articles: how they plug in
+
+The importer treats every export the same way: definition of field types in
+`importer/datasets.py` (`FIELDS`), column titles in `config/oszlopok.toml`.
+
+- **Invoices** are already wired end to end. The `[szamlak]` section in
+  `oszlopok.toml` holds EXAMPLE column titles (used by the fake data). When the real
+  invoice export arrives, replace them with the real titles; nothing else changes.
+  Invoices link to customers by customer number; invoices of blocked or unknown
+  customers are skipped and reported. Without a due date column, the due date is
+  estimated as invoice date + the customer's FizE days (marked with *).
+  Until the export exists, the invoice parts of the page say "not connected yet".
+- **Invoice lines / articles** (later): add a `szamlatetelek` entry to `FIELDS`
+  (invoice number, article, quantity, net…), a matching section in `oszlopok.toml`,
+  and aggregate per customer / article in the importer. Raw lines can be large;
+  pre-aggregating them in the importer keeps the page fast.
+
+Large lists (invoices) are written to `data.json` as `{fields, rows}` tables; the
+page expands them on load. 40 000 invoices ≈ 1 MB over the network.
+
+## Data quality and precision
+
+- IDs stay text (leading zeros survive). Amounts are parsed exactly (Decimal) and
+  summed in the browser as integer cents, only within the same currency.
+- Rows without a key, duplicates, unreadable dates/amounts and unknown codes are
+  reported with file name and line number (banner on the page + importer log).
+- Each export is a full snapshot; with several files of one kind the newest wins.
+- Files changed in the last 60 s are not read yet (`STABLE_SECONDS`), so a file SAP is
+  still writing is never imported half-finished.
+- The page warns when the export is older than 30 hours, not counting weekends.
+
+## Known limitations
+
+- `name` uses Kiválasztás. The export now also has Név / Név 2; if Név is the exact
+  company name, change it in `oszlopok.toml`.
+- The 4 FelvDátum columns: the first one is used. Check with real data which is the
+  customer's creation date.
+- No login. Authentication can be added in front of nginx without changing the app.
+- CSV export: Excel drops leading zeros when opening a CSV directly. Use
+  Data → From Text/CSV and set ID columns to Text.

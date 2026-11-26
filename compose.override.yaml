@@ -1,0 +1,10 @@
+# Development only. Merged automatically by "docker compose up".
+services:
+  web:
+    volumes:
+      # Live-edit the frontend: change a file, refresh the browser.
+      - ./web/public:/usr/share/nginx/html:ro,Z
+
+  importer:
+    environment:
+      FAKE_DATA: "1"   # generate ~7k fake rows when ./exports is empty
