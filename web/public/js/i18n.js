@@ -7,7 +7,7 @@ const LOCALES = { hu: "hu-HU", en: "en-GB" };
 
 const I18N = {
   hu: {
-    "app.title": "Vevői irányítópult",
+    "app.title": "ProAlpha Monitor",
     "lang": "Nyelv",
     "fake": "MINTA",
     "fakeNotice": "Mintaadatok: kitalált vevők és számlák. Élesben ugyanez az oldal a napi SAP exportokból töltődik.",
@@ -141,7 +141,7 @@ const I18N = {
   },
 
   en: {
-    "app.title": "Customer Dashboard",
+    "app.title": "ProAlpha Monitor",
     "lang": "Language",
     "fake": "SAMPLE",
     "fakeNotice": "Sample data: invented customers and invoices. In production this page is filled from the daily SAP exports.",
