@@ -127,6 +127,8 @@ const I18N = {
     "t.prev": "‹ Előző",
     "t.next": "Következő ›",
     "t.mixed": "Az összegek a vevő pénznemében értendők.",
+    "t.layoutReset": "Oszlopok alaphelyzetbe",
+    "t.colHint": "Kattintás: rendezés · Húzás: áthelyezés · A jobb szél húzása: szélesség (dupla kattintás: automatikus)",
 
     "d.close": "Bezárás",
     "d.manager": "Ügyintéző: {name}",
@@ -287,6 +289,8 @@ const I18N = {
     "t.prev": "‹ Prev",
     "t.next": "Next ›",
     "t.mixed": "Amounts are in the customer's currency.",
+    "t.layoutReset": "Reset columns",
+    "t.colHint": "Click: sort · Drag: move · Drag the right edge: width (double-click: automatic)",
 
     "d.close": "Close",
     "d.manager": "Account manager: {name}",

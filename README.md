@@ -81,6 +81,12 @@ the raw code without warnings.
 
 Filters, sorting and the open customer are in the URL: links can be shared and bookmarked.
 
+Tables (Vevők, Ügyintézők): click a header to sort, drag a header to move the column,
+drag a header's right edge to resize it (double-click the edge: automatic widths).
+The layout is saved per table in the browser; "Oszlopok alaphelyzetbe" resets it.
+CSV export uses the displayed column order. The theme switch (Automatikus / Világos /
+Sötét) is next to the language switch.
+
 ## Invoices and articles: how they plug in
 
 The importer treats every export the same way: definition of field types in

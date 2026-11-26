@@ -399,9 +399,37 @@ function filteredView(main, filtersHtml, draw, exportFn) {
   viewUpdate();
 }
 
-/* Sortable, paged table. Columns: {key, label, value(r), html?(r), num?, wrap?, csv?(r)} */
+/* ---------- column layout (per table, saved in this browser) ---------- */
+/* {order: [keys], widths: {key: px}}. Widths are only stored once a column has
+   been resized; until then the browser sizes the columns automatically. */
+const MIN_COL = 60, NEW_COL = 140;
+function loadLayout(id) {
+  try { return JSON.parse(localStorage.getItem(`cols:${id}`)) || {}; } catch { return {}; }
+}
+function saveLayout(id, layout) {
+  try {
+    if (!layout.order?.length && !Object.keys(layout.widths || {}).length) localStorage.removeItem(`cols:${id}`);
+    else localStorage.setItem(`cols:${id}`, JSON.stringify(layout));
+  } catch { /* storage blocked: the layout just isn't remembered */ }
+}
+/* Columns in the saved order; columns the saved order doesn't know (e.g. the
+   invoice columns once that export arrives) keep their place at the end. */
+function layoutColumns(id, columns) {
+  const order = loadLayout(id).order || [];
+  const pos = (c) => { const i = order.indexOf(c.key); return i === -1 ? order.length + columns.indexOf(c) : i; };
+  return [...columns].sort((a, b) => pos(a) - pos(b));
+}
+
+/* Sortable, paged table. Columns: {key, label, value(r), html?(r), num?, wrap?, csv?(r)}
+   Click a header to sort, drag a header to move the column, drag its right edge
+   to resize (double-click the edge: automatic widths again). */
+let dragKey = null, suppressSortClick = false;
 function drawTable(host, opts) {
-  const { columns, rows, defaultSort, total = rows.length, totals = "", id = current.view, pageSize = CONFIG.pageSize } = opts;
+  const { rows, defaultSort, total = rows.length, totals = "", id = current.view, pageSize = CONFIG.pageSize } = opts;
+  const layout = loadLayout(id);
+  const columns = layoutColumns(id, opts.columns);
+  const widths = layout.widths || {};
+  const fixed = Object.keys(widths).length > 0;
   const sp = current.params.get("sort") || defaultSort;
   const desc = sp.startsWith("-");
   const col = columns.find((c) => c.key === sp.replace(/^-/, "")) || columns[0];
@@ -415,12 +443,16 @@ function drawTable(host, opts) {
   const pages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const page = Math.min(tablePage[id] || 0, pages - 1);
   const slice = sorted.slice(page * pageSize, (page + 1) * pageSize);
+  const custom = fixed || (layout.order || []).length > 0;
+  const widthOf = (c) => widths[c.key] || NEW_COL;
 
   host.innerHTML = `
-    <div class="table-meta"><span>${esc(t("t.count", { shown: F.num(rows.length), total: F.num(total) }))}</span><span class="totals">${totals}</span></div>
-    <div class="table-wrap"><table>
-      <thead><tr>${columns.map((c) => `<th class="sortable${c.num ? " num" : ""}" data-key="${c.key}"
-        aria-sort="${c === col ? (desc ? "descending" : "ascending") : "none"}">${esc(c.label)}</th>`).join("")}</tr></thead>
+    <div class="table-meta"><span>${esc(t("t.count", { shown: F.num(rows.length), total: F.num(total) }))}${custom
+      ? ` · <button type="button" class="link-btn" data-layout-reset>${esc(t("t.layoutReset"))}</button>` : ""}</span><span class="totals">${totals}</span></div>
+    <div class="table-wrap"><table${fixed ? ` class="fixed" style="width:${columns.reduce((s, c) => s + widthOf(c), 0)}px"` : ""}>
+      ${fixed ? `<colgroup>${columns.map((c) => `<col data-key="${c.key}" style="width:${widthOf(c)}px">`).join("")}</colgroup>` : ""}
+      <thead><tr>${columns.map((c) => `<th class="sortable${c.num ? " num" : ""}" data-key="${c.key}" draggable="true" title="${esc(t("t.colHint"))}"
+        aria-sort="${c === col ? (desc ? "descending" : "ascending") : "none"}">${esc(c.label)}<span class="col-resize" data-key="${c.key}" aria-hidden="true"></span></th>`).join("")}</tr></thead>
       <tbody>${slice.length ? slice.map((r) => `<tr>${columns.map((c) =>
         `<td class="${c.num ? "num" : ""}${c.wrap ? " wrap" : ""}">${c.html ? c.html(r) : esc(c.value(r))}</td>`).join("")}</tr>`).join("")
         : `<tr class="empty-row"><td colspan="${columns.length}">${esc(t("t.empty"))}</td></tr>`}</tbody>
@@ -429,22 +461,106 @@ function drawTable(host, opts) {
       <span>${esc(t("t.page", { p: page + 1, n: pages }))}</span>
       <button type="button" class="secondary" data-page="1"${page >= pages - 1 ? " disabled" : ""}>${esc(t("t.next"))}</button></div>` : ""}`;
 
+  const redraw = () => drawTable(host, opts);
+
   host.onclick = (e) => {
+    if (e.target.closest("[data-layout-reset]")) { saveLayout(id, {}); redraw(); return; }
+    if (e.target.closest(".col-resize") || suppressSortClick) return;
     const th = e.target.closest("th[data-key]");
     if (th) {
       const k = th.dataset.key;
       setParams({ sort: sp.replace(/^-/, "") === k && !desc ? "-" + k : k });
       tablePage[id] = 0;
-      drawTable(host, opts);
+      redraw();
       return;
     }
     const pg = e.target.closest("[data-page]");
     if (pg) {
       tablePage[id] = page + +pg.dataset.page;
-      drawTable(host, opts);
+      redraw();
       host.scrollIntoView({ block: "nearest" });
     }
   };
+
+  /* Resize: drag the right edge of a header. The first resize freezes every
+     column at its current width, then the dragged one follows the pointer. */
+  host.ondblclick = (e) => {
+    if (!e.target.closest(".col-resize")) return;
+    saveLayout(id, { ...loadLayout(id), widths: {} });
+    redraw();
+  };
+  host.onpointerdown = (e) => {
+    const handle = e.target.closest(".col-resize");
+    if (!handle || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const table = $("table", host), ths = [...table.querySelectorAll("thead th")];
+    const w = {};
+    for (const th of ths) w[th.dataset.key] = widths[th.dataset.key] || Math.ceil(th.getBoundingClientRect().width) + 1; // +1: no clipped headers
+    let cg = $("colgroup", table);
+    if (!cg) {
+      cg = document.createElement("colgroup");
+      cg.innerHTML = ths.map((th) => `<col data-key="${th.dataset.key}">`).join("");
+      table.prepend(cg);
+    }
+    const apply = () => {
+      for (const c of cg.children) c.style.width = `${w[c.dataset.key]}px`;
+      table.classList.add("fixed");
+      table.style.width = `${Object.values(w).reduce((a, b) => a + b, 0)}px`;
+    };
+    apply();
+    const key = handle.dataset.key, startX = e.clientX, startW = w[key];
+    ths.forEach((th) => { th.draggable = false; });
+    document.body.classList.add("resizing");
+    const move = (ev) => { w[key] = Math.max(MIN_COL, Math.round(startW + ev.clientX - startX)); apply(); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      document.body.classList.remove("resizing");
+      ths.forEach((th) => { th.draggable = true; });
+      saveLayout(id, { ...loadLayout(id), widths: w });
+      // the pointer is released over a header: don't let that count as a sort click
+      suppressSortClick = true;
+      setTimeout(() => { suppressSortClick = false; redraw(); }, 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  };
+
+  /* Reorder: drag a header onto another; it lands before or after it,
+     depending on which half of the target the pointer is over. */
+  const clearMarks = () => host.querySelectorAll("th.drop-before, th.drop-after, th.dragging")
+    .forEach((th) => th.classList.remove("drop-before", "drop-after", "dragging"));
+  const side = (th, e) => (e.clientX > th.getBoundingClientRect().left + th.getBoundingClientRect().width / 2 ? "after" : "before");
+  host.ondragstart = (e) => {
+    const th = e.target.closest("th[data-key]");
+    if (!th) return;
+    dragKey = th.dataset.key;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragKey);
+    th.classList.add("dragging");
+  };
+  host.ondragover = (e) => {
+    const th = e.target.closest("th[data-key]");
+    if (!th || !dragKey) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    host.querySelectorAll("th.drop-before, th.drop-after").forEach((x) => x.classList.remove("drop-before", "drop-after"));
+    if (th.dataset.key !== dragKey) th.classList.add(`drop-${side(th, e)}`);
+  };
+  host.ondrop = (e) => {
+    const th = e.target.closest("th[data-key]");
+    if (!th || !dragKey) return;
+    e.preventDefault();
+    const keys = columns.map((c) => c.key).filter((k) => k !== dragKey);
+    const at = keys.indexOf(th.dataset.key);
+    if (at !== -1) {
+      keys.splice(at + (side(th, e) === "after" ? 1 : 0), 0, dragKey);
+      saveLayout(id, { ...loadLayout(id), order: keys });
+    }
+    dragKey = null;
+    redraw();
+  };
+  host.ondragend = () => { dragKey = null; clearMarks(); };
   return sorted;
 }
 
@@ -624,7 +740,7 @@ function renderManagers(main) {
     const q = (p.get("q") || "").toLowerCase();
     rows = [...S.managers.values()].filter((m) => !q || m._s.includes(q));
     rows = drawTable(host, { columns: managerColumns(), rows, defaultSort: "-count", total: S.managers.size });
-  }, () => exportCsv("ugyintezok", managerColumns(), rows));
+  }, () => exportCsv("ugyintezok", layoutColumns("managers", managerColumns()), rows));
 }
 
 /* ---------- customers list ---------- */
@@ -679,7 +795,7 @@ function renderCustomers(main) {
       words.every((w) => c._s.includes(w)));
     rows = drawTable(host, { columns: customerColumns(), rows, defaultSort: "-created", total: S.customers.length,
       totals: S.hasInvoices ? esc(t("t.mixed")) : "" });
-  }, () => exportCsv("vevok", customerColumns(), rows));
+  }, () => exportCsv("vevok", layoutColumns("customers", customerColumns()), rows));
 }
 
 /* ---------- customer page ---------- */

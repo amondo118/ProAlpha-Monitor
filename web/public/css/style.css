@@ -182,6 +182,19 @@ th, td { padding: 8px 12px; text-align: left; white-space: nowrap; border-bottom
 th { background: var(--surface-2); position: sticky; top: 0; font-family: var(--font-mono); font-weight: 500; font-size: 11px;
   text-transform: uppercase; letter-spacing: .07em; color: var(--text-2); z-index: 1; }
 th.sortable { cursor: pointer; user-select: none; }
+/* column resize handle (right edge of each header) and drag-to-reorder marks */
+.col-resize { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; z-index: 2; touch-action: none; }
+.col-resize::after { content: ""; position: absolute; right: 3px; top: 25%; height: 50%; width: 1px; background: var(--border); }
+th:hover .col-resize::after, .resizing .col-resize::after { background: var(--text-3); }
+.resizing, .resizing * { cursor: col-resize !important; user-select: none; }
+th.dragging { opacity: .45; }
+th.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+th.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+table.fixed { table-layout: fixed; }
+table.fixed th, table.fixed td { overflow: hidden; text-overflow: ellipsis; }
+table.fixed td.wrap { min-width: 0; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 400; cursor: pointer; }
+.link-btn:hover { background: none; text-decoration: underline; }
 th[aria-sort="ascending"]::after { content: " ▲"; }
 th[aria-sort="descending"]::after { content: " ▼"; }
 th.num { text-align: right; }
