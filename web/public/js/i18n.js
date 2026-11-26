@@ -38,8 +38,8 @@ const I18N = {
     "nav.help": "Súgó",
     "nav.customer": "Vevő",
     "nav.manager": "Ügyintéző",
-    "help.title": "Súgó – így használja a ProAlpha Monitort",
-    "help.intro": "Az oldal a napi vevő- és számla-exportokból mutatja a forgalmat, a vevőket és az ügyintézőket. Csak olvas: semmit nem módosít az ERP-ben. Minden szám kattintható, és a hozzá tartozó részletekhez visz.",
+    "help.title": "Súgó",
+    "help.intro": "Forgalom, vevők és ügyintézők a napi exportokból. Minden szám kattintható.",
     "welcome.title": "Üdvözli a ProAlpha Monitor!",
     "welcome.text": "Először jár itt? A jobb felső ? ikon mögött rövid útmutatót talál: keresés, szűrők, időszakok, oszlopok áthelyezése és még sok más.",
     "welcome.open": "Súgó megnyitása",
@@ -301,8 +301,8 @@ const I18N = {
     "nav.help": "Help",
     "nav.customer": "Customer",
     "nav.manager": "Account manager",
-    "help.title": "Help – how to use ProAlpha Monitor",
-    "help.intro": "The site shows sales, customers and account managers from the daily customer and invoice exports. It only reads: nothing is changed in the ERP. Every figure is clickable and leads to its details.",
+    "help.title": "Help",
+    "help.intro": "Sales, customers and account managers from the daily exports. Every figure is clickable.",
     "welcome.title": "Welcome to ProAlpha Monitor!",
     "welcome.text": "New here? The ? icon at the top right opens a short guide: search, filters, periods, moving columns and more.",
     "welcome.open": "Open the help",
@@ -536,101 +536,55 @@ const I18N = {
 /* Help page content (trusted, static markup). */
 const HELP = {
   hu: [
-    { title: "Keresés", items: [
-      "Írjon vevőszámot vagy nevet (részlet is elég) a felső keresőmezőbe. A javaslatok közt a <kbd>↑</kbd> <kbd>↓</kbd> nyilakkal lépkedhet, az <kbd>Enter</kbd> megnyitja a vevőt.",
-      "Ha több vevő illik a keresésre, az <kbd>Enter</kbd> a Vevők listát nyitja meg erre szűrve.",
-      "A listák saját keresőmezője is részletre keres: név, vevőszám, keresőfogalom, adószám, város.",
+    { title: "Keresés és navigálás", items: [
+      "Felső keresőmező: vevőszám vagy név (részlet is elég), <kbd>Enter</kbd> megnyitja.",
+      "Vevő vagy ügyintéző nevére kattintva megnyílik a saját oldala; vissza: <b>←</b>.",
+      "<b>⚠</b>: import állapota. <b>?</b>: súgó.",
     ] },
-    { title: "Fülek", items: [
-      "<b>Áttekintés</b> – az év fő számai, havi forgalom az előző évhez képest, legnagyobb vevők, forgalom ügyintézőnként, ágazatonként, régiónként és pénznemenként.",
-      "<b>Értékesítés</b> – forgalom tetszőleges időszakra és bontásban (lásd lent).",
-      "<b>Vevők</b> – minden vevő szűrhető, rendezhető listája.",
-      "<b>Ügyintézők</b> – összesítés és táblázat ügyintézőnként.",
-      "<b>⚠</b> – az import állapota és az ellenőrzések. <b>?</b> – ez a súgó.",
-      "Bármely vevő vagy ügyintéző nevére kattintva megnyílik a saját oldala; a <b>←</b> link visz vissza.",
-    ] },
-    { title: "Értékesítés fül", items: [
-      "<b>Időszak</b>: utolsó 12 hónap, idei év, tavalyi év, utolsó 3 év, teljes időszak – vagy saját dátumok a <i>Kelt -tól / -ig</i> mezőkben.",
-      "<b>Időbeli bontás</b>: nap, hét, hónap, negyedév, félév, év. <b>Összeg</b>: nettó vagy bruttó.",
-      "<b>Pénznem</b>: minden pénznem külön számol, sosem adódnak össze. A nagy gombokon az adott pénznem összege látszik – kattintson rá a váltáshoz.",
-      "Minden időszak az előző év azonos időszakával van összevetve; a folyamatban lévő időszak az előző év azonos <i>részével</i> (pl. november 1–26.).",
-      "A lap alján a <b>Bontás</b> gombokkal válthat: vevő, ügyintéző, régió, ágazat, ország, számlakiállító. A felső szűrők (ügyintéző, régió, ágazat, ország, keresés) mindenre érvényesek.",
+    { title: "Értékesítés", items: [
+      "Válasszon <b>időszakot</b>, <b>bontást</b> (naptól évig) és <b>nettó/bruttó</b> összeget.",
+      "<b>Pénznemek</b> külön számolnak, sosem adódnak össze – váltás a nagy gombokkal.",
+      "Mindig az előző év azonos időszakával hasonlít.",
     ] },
     { title: "Táblázatok", items: [
-      "<b>Rendezés</b>: kattintson az oszlop fejlécére; újabb kattintás megfordítja a sorrendet.",
-      "<b>Oszlop áthelyezése</b>: fogja meg a fejlécet, és húzza balra vagy jobbra – egy zöld vonal mutatja, hova kerül.",
-      "<b>Oszlopszélesség</b>: húzza a fejléc jobb szélét. Dupla kattintás a szélén: automatikus szélességek.",
-      "Az elrendezést a böngésző megjegyzi; az <b>Oszlopok alaphelyzetbe</b> link visszaállítja. Érintőképernyőn az áthelyezés nem működik.",
-      "Hosszú listák alatt <b>Előző / Következő</b> gombokkal lapozhat.",
+      "Fejlécre kattintás: <b>rendezés</b>.",
+      "Fejléc húzása: oszlop <b>áthelyezése</b>. Jobb szél húzása: <b>szélesség</b> (dupla kattintás: automatikus).",
+      "<b>Oszlopok alaphelyzetbe</b>: eredeti elrendezés.",
     ] },
-    { title: "Szűrők, linkek, exportálás", items: [
-      "Minden szűrés, rendezés és megnyitott oldal a címsorban (a linkben) van: a link elküldhető vagy könyvjelzőzhető, és ugyanazt a nézetet nyitja meg.",
-      "Az <b>Alaphelyzet</b> gomb törli a szűrőket.",
-      "<b>Exportálás (CSV)</b>: a Vevők, Ügyintézők és Értékesítés fülön, magyar Excel-formátumban, a képernyőn látható oszlopsorrendben.",
-      "Tipp: hogy az Excel ne vágja le a vezető nullákat, a CSV-t az <i>Adatok → Szövegből/CSV-ből</i> menüvel nyissa meg, és az azonosító oszlopokat állítsa <i>Szöveg</i> típusúra.",
+    { title: "Szűrők és export", items: [
+      "A szűrők a linkben vannak – elküldhető, könyvjelzőzhető. <b>Alaphelyzet</b>: törlés.",
+      "<b>Exportálás (CSV)</b>: Excelhez, a látható oszlopsorrendben.",
     ] },
-    { title: "Adatok és számok", items: [
-      "Az adatok naponta frissülnek az exportokból. Az <b>Adatok:</b> felirat a fejlécben az export idejét mutatja; az oldal 10 percenként magától frissít.",
-      "A <b>⚠</b> ikon szürke, ha minden rendben; sárga számmal, ha az importálásnak figyelmeztetései vannak; piros, ha az adatok elavultak vagy egy ellenőrzés hibás.",
-      "Az összegek <b>nettók</b>, ha nincs másképp jelölve. A jóváírások levonódnak, a zárolt vevők és számláik kimaradnak, az ismétlődő sorok egyszer számítanak.",
-      "Az ügyintézőnkénti forgalom a vevő <i>jelenlegi</i> ügyintézője szerint számol. Az Áttekintés és az Ügyintézők összesítései forintos számlákból készülnek; a többi pénznem külön látszik.",
-    ] },
-    { title: "Megjelenés", items: [
-      "A jobb felső sarokban választható a <b>téma</b> (automatikus / világos / sötét) és a <b>nyelv</b> (magyar / English). A böngésző mindkettőt megjegyzi.",
-    ] },
-    { title: "Beállítások (adminisztrátoroknak)", items: [
-      "<code>config/oszlopok.toml</code> – melyik export-oszlopot olvassa az oldal, a zárolt jelzők és a jóváírás-típusok.",
-      "<code>config/kodlistak.toml</code> – kódok és nevek (pénznem, ágazat, régió, fizetési mód).",
-      "Mentés után az importáló egy percen belül újra beolvassa az adatokat. Hibás beállításnál a régi adatok maradnak, a hiba a ⚠ fülön és a naplóban látszik.",
+    { title: "Adatok", items: [
+      "Naponta frissül; az <b>Adatok:</b> felirat az export idejét mutatja.",
+      "Összegek nettóban; jóváírások levonva, zárolt vevők nélkül.",
+      "<b>⚠</b> sárga: figyelmeztetés, piros: elavult adat vagy hibás ellenőrzés.",
     ] },
   ],
   en: [
-    { title: "Search", items: [
-      "Type a customer number or name (a part is enough) into the search box at the top. Move through the suggestions with <kbd>↑</kbd> <kbd>↓</kbd>; <kbd>Enter</kbd> opens the customer.",
-      "If several customers match, <kbd>Enter</kbd> opens the Customers list filtered to them.",
-      "The lists' own search boxes also match parts: name, customer number, search term, tax number, city.",
+    { title: "Search and navigation", items: [
+      "Search box at the top: customer number or name (a part is enough), <kbd>Enter</kbd> opens it.",
+      "Click a customer or account manager name to open their page; back: <b>←</b>.",
+      "<b>⚠</b>: import status. <b>?</b>: help.",
     ] },
-    { title: "Tabs", items: [
-      "<b>Overview</b> – the year's key figures, monthly sales vs last year, top customers, sales by account manager, industry, region and currency.",
-      "<b>Sales</b> – sales for any period, broken down any way (see below).",
-      "<b>Customers</b> – every customer, filterable and sortable.",
-      "<b>Account managers</b> – summary and table per account manager.",
-      "<b>⚠</b> – import status and checks. <b>?</b> – this help.",
-      "Click any customer or account manager name to open their own page; the <b>←</b> link goes back.",
-    ] },
-    { title: "Sales tab", items: [
-      "<b>Period</b>: last 12 months, this year, last year, last 3 years, all time – or your own dates in the <i>Date from / to</i> fields.",
-      "<b>Time breakdown</b>: day, week, month, quarter, half year, year. <b>Amount</b>: net or gross.",
-      "<b>Currency</b>: each currency is counted separately and never added together. The large buttons show each currency's total – click one to switch.",
-      "Every period is compared with the same period last year; the current period with the same <i>part</i> of last year's (e.g. 1–26 November).",
-      "Switch the <b>Breakdown</b> at the bottom: customer, account manager, region, industry, country, invoice issuer. The filters at the top (account manager, region, industry, country, search) apply to everything.",
+    { title: "Sales", items: [
+      "Pick a <b>period</b>, a <b>breakdown</b> (day to year) and <b>net/gross</b>.",
+      "<b>Currencies</b> are counted separately, never added – switch with the large buttons.",
+      "Always compared with the same period last year.",
     ] },
     { title: "Tables", items: [
-      "<b>Sort</b>: click a column header; click again to reverse.",
-      "<b>Move a column</b>: grab its header and drag it left or right – a green line shows where it lands.",
-      "<b>Column width</b>: drag the right edge of a header. Double-click the edge for automatic widths.",
-      "The browser remembers the layout; <b>Reset columns</b> restores it. Moving columns doesn't work on touch screens.",
-      "Long lists have <b>Prev / Next</b> buttons below.",
+      "Click a header: <b>sort</b>.",
+      "Drag a header: <b>move</b> the column. Drag its right edge: <b>width</b> (double-click: automatic).",
+      "<b>Reset columns</b>: original layout.",
     ] },
-    { title: "Filters, links, export", items: [
-      "Every filter, sort and open page is in the address (the link): send or bookmark it and it opens the same view.",
-      "<b>Reset</b> clears the filters.",
-      "<b>Export CSV</b> on the Customers, Account managers and Sales tabs, in the Hungarian Excel format, in the column order on screen.",
-      "Tip: so Excel keeps leading zeros, open the CSV via <i>Data → From Text/CSV</i> and set the ID columns to <i>Text</i>.",
+    { title: "Filters and export", items: [
+      "Filters are in the link – send or bookmark it. <b>Reset</b> clears them.",
+      "<b>Export CSV</b>: for Excel, in the column order on screen.",
     ] },
-    { title: "Data and figures", items: [
-      "Data is updated daily from the exports. <b>Data as of</b> in the header shows the export time; the page refreshes itself every 10 minutes.",
-      "The <b>⚠</b> icon is grey when all is well, amber with a number when the import has warnings, red when the data is out of date or a check failed.",
-      "Amounts are <b>net</b> unless marked otherwise. Credit notes are subtracted, blocked customers and their invoices are left out, repeated rows count once.",
-      "Sales per account manager follow the customer's <i>current</i> account manager. The Overview and Account managers totals use HUF invoices; other currencies are shown separately.",
-    ] },
-    { title: "Appearance", items: [
-      "Pick the <b>theme</b> (automatic / light / dark) and the <b>language</b> (magyar / English) at the top right. The browser remembers both.",
-    ] },
-    { title: "Settings (for administrators)", items: [
-      "<code>config/oszlopok.toml</code> – which export columns the site reads, the blocked markers and the credit note types.",
-      "<code>config/kodlistak.toml</code> – codes and names (currency, industry, region, payment method).",
-      "After saving, the importer reads the data again within a minute. With a broken setting the old data stays; the error shows on the ⚠ tab and in the log.",
+    { title: "Data", items: [
+      "Updated daily; <b>Data as of</b> shows the export time.",
+      "Amounts are net; credit notes subtracted, blocked customers left out.",
+      "<b>⚠</b> amber: warnings, red: out-of-date data or a failed check.",
     ] },
   ],
 };

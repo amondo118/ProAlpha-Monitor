@@ -327,9 +327,10 @@ dialog .table-wrap { max-height: 50vh; }
 }
 
 /* help page */
-.help-intro h1 { font-size: 26px; margin-bottom: 6px; }
+.help-intro h1 { font-size: 24px; margin-bottom: 4px; }
 .help-intro p { margin: 0; color: var(--text-2); max-width: 760px; }
-.help ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.help ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.help { grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); }
 .help li { line-height: 1.5; }
 kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface-2); }
 .help code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
