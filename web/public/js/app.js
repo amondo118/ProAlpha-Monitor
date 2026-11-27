@@ -838,7 +838,7 @@ function renderOverview(main) {
   const big = (v) => { const p = F.compactParts(v, "HUF"); return `${esc(p.num)}<span class="unit">${esc(p.unit)}</span>`; };
   const pmItems = [...S.managers.values()].filter((m) => m.key !== NONE).sort((a, b) => b.count - a.count).map((m) => ({
     label: pmLink(m.key), value: m.count,
-    tip: `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}\n${t("col.newYtd")}: ${m.newYtd}`,
+    tip: `${pmName(m.key)}\n${t("chart.customersN", { n: F.num(m.count) })}\n${t("kpi.newYtd", { p: P.short })}: ${m.newYtd}`,
   }));
   const latest = [...all].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created) || b.id.localeCompare(a.id)).slice(0, 8);
   const latestCard = `<section class="card">
