@@ -263,5 +263,13 @@ Hibás config esetén az importer a naplóba írja a hibát, és a legutóbbi j�
   Dockertől függetlenül: a szerveren `python3 -m http.server 8099`, a másik gépről
   `curl -I http://<szerver-IP>:8099`. Ha ez sem jut át, válassz más portot (pl. 8080)
   vagy kérj portnyitást a hálózat gazdájától.
+- **Build közben DNS-hiba** (`Temporary failure in name resolution`, `could not resolve`,
+  `pull access denied`, `TLS handshake timeout`): a konténerek nem érik el a belső
+  DNS-szervert (céges hálózatban a Docker alapértelmezett 8.8.8.8-a gyakran tiltott).
+  A szerver DNS-szerverei: `resolvectl status | grep 'DNS Servers'`. Ezeket add meg a
+  Dockernek az `/etc/docker/daemon.json` fájlban (az IP-k a sajátjaitok):
+  `{ "dns": ["192.168.1.10", "192.168.1.11"] }`, majd `sudo systemctl restart docker`.
+  Proxyval kijutó hálózatban a Docker proxyját is be kell állítani (systemd
+  `http-proxy.conf`, lásd a Docker dokumentációját).
 - **„port is already allocated”:** más szolgáltatás (pl. egy másik webszerver) használja
   a 80-as portot; állíts be másik `WEB_PORT`-ot a `.env`-ben.
