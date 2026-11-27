@@ -89,8 +89,13 @@ például:
 
 ```
 EXPORTS_DIR=/srv/sap-exports
-WEB_PORT=80
+WEB_PORT=8080
 ```
+
+`WEB_PORT`: ezen a porton érhető el az oldal. A 80-as szebb (nem kell a címbe írni), de
+gyakran már foglalja egy előre telepített webszerver; a 8080 a legtöbb hálózaton át is
+jut. Kerüld a nem szabványos alacsony portokat (pl. 100): a ping átmehet, a böngésző
+mégsem éri el, mert a hálózat szűri őket.
 
 Ha a mappa még nem létezik:
 
@@ -159,7 +164,7 @@ sudo ufw allow 80/tcp
 sudo ufw status
 ```
 
-Az oldal ezután: `http://<szerver-neve-vagy-IP>/` (más port esetén `:PORT` a végére).
+Az oldal ezután: `http://<szerver-neve-vagy-IP>:8080/` (80-as portnál a `:8080` elhagyható).
 
 ## 6. Frissítés új verzióra
 
@@ -223,5 +228,9 @@ Hibás config esetén az importer a naplóba írja a hibát, és a legutóbbi j�
   foglalt-e a port: `sudo ss -ltnp | grep :80` (pl. egy előre telepített `apache2` vagy `nginx`).
 - **Az oldalon a ⚠ ikon piros:** az export 30 óránál régebbi (hétvégét nem számolva), vagy
   egy ellenőrzés nem stimmel. Részletek a ⚠ fülön és az importer naplójában.
+- **A ping átmegy, a böngésző nem éri el:** a hálózat szűri azt a portot. Próbáld ki
+  Dockertől függetlenül: a szerveren `python3 -m http.server 8099`, a másik gépről
+  `curl -I http://<szerver-IP>:8099`. Ha ez sem jut át, válassz más portot (pl. 8080)
+  vagy kérj portnyitást a hálózat gazdájától.
 - **„port is already allocated”:** más szolgáltatás (pl. egy másik webszerver) használja
   a 80-as portot; állíts be másik `WEB_PORT`-ot a `.env`-ben.
