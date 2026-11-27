@@ -1021,8 +1021,7 @@ function managerColumns() {
         html: (m) => esc(F.pct(totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0)) },
       ...(S.hasOffers ? [{ key: "offers", label: t("off.col", { p: P.short }), num: true, value: (m) => m.offersYtd,
         html: (m) => (m.offersYtd ? `<a href="${managerHref(m.key)}" title="${esc(t("off.customersN", { n: F.num(m.offerCustomers.size) }))}">${esc(F.num(m.offersYtd))}</a>` : "0") }] : []),
-      { key: "other", label: t("mgr.col.other"), value: (m) => moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF" && c !== "EUR"))),
-        html: (m) => `<span class="muted">${esc(moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF" && c !== "EUR"))))}</span>` });
+    );
     if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (m) => hufOf(m.open), html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
   } else {
     cols.push({ key: "share", label: t("col.share"), num: true, value: (m) => m.count / totalCustomers, html: (m) => esc(F.pct(m.count / totalCustomers)) });
