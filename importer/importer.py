@@ -162,7 +162,7 @@ def build(files, cfg):
         clerks = {k.casefold(): v for k, v in cfg["codes"].get("ugyintezok", {}).items()}
         invoices, offers, by_key, of_blocked, orphans, merged = [], [], {}, 0, {}, 0
         kinds, types, cancelled, raw_rows, skipped = {}, {}, 0, len(rows), 0
-        skipped_types = 0
+        skipped_types, no_rate = 0, {}
         for r in rows:
             line = r.pop("_line")
             if not r.get("id") or not r.get("customer_id"):
@@ -198,17 +198,18 @@ def build(files, cfg):
             if has_type and bf in offer_types:
                 offers.append({f: r.get(f) for f in ("id", "customer_id", "date", "net", "gross", "currency", "currency_code", "clerk")})
                 continue
+            to_huf(r, no_rate)
             kind = r.get("kind") or ""
             kinds[kind] = kinds.get(kind, 0) + 1
             if datasets.fold(kind) in negative:
-                for f in ("net", "gross", "net_local"):
+                for f in ("net", "gross", "net_local", "gross_local"):
                     if r.get(f) is not None:
                         r[f] = -abs(r[f])
                 r["credit"] = True
             if (r.get("cancelled") or "").strip().lower() in ("igen", "i", "yes", "x"):
                 cancelled += 1
             # Keep the page's data small: drop what was only needed here
-            for f in ("doc_id", "kind", "cancelled"):
+            for f in ("doc_id", "kind", "cancelled", "rate"):
                 r.pop(f, None)
             if r.get("currency"):
                 r.pop("currency_code", None)
@@ -218,6 +219,8 @@ def build(files, cfg):
         for o in offers:
             if o.get("currency"):
                 o.pop("currency_code", None)
+        for cur, n in sorted(no_rate.items()):
+            warnings.append(f"{n} {cur} invoices have no exchange rate: left out of the HUF totals")
         for cid, n in sorted(orphans.items()):
             warnings.append(f"Documents for unknown customer {cid}: {n} (not in the customer export)")
         data["invoices"] = invoices
@@ -227,8 +230,29 @@ def build(files, cfg):
                                "skipped_types": skipped_types, "skipped_blocked": of_blocked, "duplicates_merged": merged,
                                "unmatched": sum(orphans.values()), "types": types, "invoice_types": sorted(invoice_types),
                                "offer_types": sorted(offer_types), "kinds": kinds, "cancelled_flagged": cancelled,
-                               "has_payments": "cleared" in section.get("oszlopok", {})}
+                               "has_payments": "cleared" in section.get("oszlopok", {}),
+                               "no_rate": no_rate}
     return data, sources, warnings
+
+
+def to_huf(r, no_rate):
+    """Forint value of an invoice: from the export's own HUF column if mapped,
+    else amount x the invoice's exchange rate (Valutaárf.), exact to the fillér.
+    HUF invoices need nothing (their amount is the forint value)."""
+    from decimal import Decimal, ROUND_HALF_UP
+    cur = (r.get("currency") or r.get("currency_code") or "").upper()
+    if cur == "HUF":
+        r["net_local"] = r["gross_local"] = None
+        return
+    rate = r.get("rate")
+    for src, dst in (("net", "net_local"), ("gross", "gross_local")):
+        if r.get(dst) is not None or r.get(src) is None:
+            continue
+        if rate and rate > 0 and not (rate == 1 and cur):
+            v = (Decimal(str(r[src])) * Decimal(str(rate))).quantize(Decimal("0.01"), ROUND_HALF_UP)
+            r[dst] = int(v) if v == v.to_integral_value() else float(v)
+    if r.get("net_local") is None:
+        no_rate[cur or "?"] = no_rate.get(cur or "?", 0) + 1
 
 
 def control_totals(data):
@@ -239,15 +263,18 @@ def control_totals(data):
     ids = {c["id"] for c in data["customers"]}
     out = {"customers": len(data["customers"])}
     if "invoices" in data:
-        net, count = {}, {}
+        net, count, huf = {}, {}, 0
+        cents = lambda v: int((Decimal(str(v or 0)) * 100).to_integral_value())
         for i in data["invoices"]:
             if i["customer_id"] not in ids or not i.get("date"):
                 continue
             cur = i.get("currency") or i.get("currency_code") or ""
-            net[cur] = net.get(cur, 0) + int((Decimal(str(i["net"] or 0)) * 100).to_integral_value())
+            net[cur] = net.get(cur, 0) + cents(i["net"])
             count[cur] = count.get(cur, 0) + 1
+            huf += cents(i["net"] if cur == "HUF" else i.get("net_local"))
         out["invoices_by_currency"] = count
         out["net_cents_by_currency"] = net
+        out["net_huf_cents"] = huf
     if "offers" in data:
         out["offers"] = sum(1 for o in data["offers"] if o["customer_id"] in ids and o.get("date"))
     return out

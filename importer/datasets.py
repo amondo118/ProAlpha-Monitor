@@ -41,7 +41,9 @@ FIELDS = {
         "origin": "text",        # created from: order / delivery note (BF)
         "clerk": "text",         # who issued it (user name)
         "cleared": "date",       # payment date; without it there is no open-invoice view
-        "net_local": "amount",   # optional: net in HUF, for totals across currencies
+        "rate": "amount",       # exchange rate: HUF for 1 unit of the invoice currency (1 for HUF)
+        "net_local": "amount",  # optional: net in HUF from the export; else net x rate
+        "gross_local": "amount",
     },
 }
 # The data.json key for each export

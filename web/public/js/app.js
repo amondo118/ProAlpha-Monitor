@@ -56,6 +56,11 @@ const isGross = () => SETTINGS.amount === "gross";
 const amtOf = (i) => (isGross() ? (i.gross ?? i.net) : i.net);
 const val = (i) => cents(amtOf(i));
 const amtWord = () => t(isGross() ? "sales.gross" : "sales.net");
+/* Forint value of an invoice (net or gross, per the switch): a HUF invoice as it
+   is, any other converted by the importer at the invoice's own exchange rate
+   (Valutaárf.). null: no rate in the export (reported on the ⚠ tab). */
+const hufAmt = (i) => (i.cur === "HUF" ? amtOf(i) : (isGross() ? (i.gross_local ?? i.net_local) : i.net_local) ?? null);
+const hufVal = (i) => cents(hufAmt(i) ?? 0);
 
 // "New customer" window (days), from the settings
 const PERIOD = {};
@@ -303,6 +308,8 @@ function index(data) {
     if (c.country && c.country !== CONFIG.homeCountry) m.foreign++;
     if (c.created && (!m.last || c.created > m.last)) m.last = c.created;
     for (const [cur, v] of c.st.ytd) addTo(m.ytd, cur, v);
+    m.hufCur += c.st.hufCur;
+    m.hufPrev += c.st.hufPrev;
     for (const [cur, v] of c.st.prev) addTo(m.prev, cur, v);
     for (const [cur, v] of c.st.total) addTo(m.total, cur, v);
     for (const [cur, v] of c.st.open) addTo(m.open, cur, v);
@@ -340,14 +347,14 @@ function index(data) {
 
 function newManager(key) {
   return { key, customers: [], count: 0, new30: 0, newYtd: 0, foreign: 0, last: null,
-    ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), active: 0, activePrev: 0, invoices: [],
+    ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), hufCur: 0, hufPrev: 0, active: 0, activePrev: 0, invoices: [],
     offers: [], offersYtd: 0, offersPrev: 0, offerCustomers: new Set() };
 }
 
 /* Per-customer invoice figures, per currency in cents. */
 function customerStats(c) {
   const st = { ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), byYear: new Map(),
-    openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
+    hufCur: 0, hufPrev: 0, openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
   const counts = new Map();
   for (const i of c.invoices) {
     const v = val(i);
@@ -363,8 +370,8 @@ function customerStats(c) {
       addTo(st.byYear.get(y), i.cur, v);
       st.firstYear = Math.min(st.firstYear ?? y, y);
       st.lastYear = Math.max(st.lastYear ?? y, y);
-      if (inCur(i.date)) addTo(st.ytd, i.cur, v);
-      if (inPrev(i.date)) addTo(st.prev, i.cur, v);
+      if (inCur(i.date)) { addTo(st.ytd, i.cur, v); st.hufCur += hufVal(i); }
+      if (inPrev(i.date)) { addTo(st.prev, i.cur, v); st.hufPrev += hufVal(i); }
     }
     if (i.open) {
       addTo(st.open, i.cur, v);
@@ -487,6 +494,11 @@ function computeChecks() {
   const refCount = new Map(Object.entries(ref.invoices_by_currency || {})), refNet = new Map(Object.entries(ref.net_cents_by_currency || {}));
   add(t("chk.count"), same(count, refCount), fmtMap(count));
   add(t("chk.net"), same(net, refNet), fmtMap(net, true));
+  if (ref.net_huf_cents != null) {
+    let huf = 0;
+    for (const i of S.invoices) if (i.date) huf += cents(i.cur === "HUF" ? i.net : i.net_local);
+    add(t("chk.huf"), huf === ref.net_huf_cents, F.money(huf / 100, "HUF"));
+  }
   // 2) the same sums via the customers and via the Ügyintézők
   const allNet = new Map(); for (const i of S.invoices) addTo(allNet, i.cur, cents(i.net));
   const viaCustomers = new Map(); for (const c of S.customers) for (const [k, v] of c.st.total) addTo(viaCustomers, k, v);
@@ -910,16 +922,17 @@ function renderOverview(main) {
   const { prevKeys, toCur } = prevBuckets(keys, P.prevFrom, P.prevTo, g);
   let ytd = 0, prevYtdSales = 0, lm = 0, lmPrev = 0;
   const active = new Set(), activePrev = new Set();
-  const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), curCount = new Map();
+  const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), hufByCurrency = new Map(), curCount = new Map();
   for (const i of S.invoices) {
     if (!i.date) continue;
     if (inCur(i.date)) {
       active.add(i.c);
       addTo(byCurrency, i.cur, val(i));
+      addTo(hufByCurrency, i.cur, hufVal(i));
       if (!i.credit) curCount.set(i.cur, (curCount.get(i.cur) || 0) + 1);
     } else if (inPrev(i.date)) activePrev.add(i.c);
-    if (i.cur !== "HUF") continue;
-    const v = val(i), k = periodKey(i.date, g), km = periodKey(i.date, "month");
+    // every currency counts, converted to forints at the invoice's own rate
+    const v = hufVal(i), k = periodKey(i.date, g), km = periodKey(i.date, "month");
     if (inCur(i.date)) {
       ytd += v;
       addTo(byIndustry, i.c.industryLabel || "", v);
@@ -935,9 +948,9 @@ function renderOverview(main) {
     label: k ? `<a href="#sales?${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
     value: v / 100, tip: `${k ? label(k) : t("none")}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}`,
   }));
-  const topCustomers = all.map((c) => [c, c.st.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN)
+  const topCustomers = all.map((c) => [c, c.st.hufCur]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN)
     .map(([c, v]) => ({ label: custLink(c), value: v / 100, tip: `${c.name}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
-  const managerSales = [...S.managers.values()].filter((m) => m.key !== NONE).map((m) => [m, m.ytd.get("HUF") || 0]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+  const managerSales = [...S.managers.values()].filter((m) => m.key !== NONE).map((m) => [m, m.hufCur]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
     .map(([m, v]) => ({ label: pmLink(m.key), value: v / 100, tip: `${pmName(m.key)}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
   const lmLabel = F.monthYear(lmKey);
   const offersYtd = S.offers.filter((o) => inCur(o.date)).length;
@@ -970,7 +983,8 @@ function renderOverview(main) {
       <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { p: P.short }))}</h2></div>${hbars(salesItems(byRegion, "region", (k) => k), money)}</section>
       <section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { p: P.short }))}</h2></div>
         <dl class="rows">${currencyOrder().filter((c) => byCurrency.has(c)).map((c) => `<div><dt><a href="#sales?cur=${encodeURIComponent(c)}"><b>${esc(c)}</b></a>
-          <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${esc(F.money(byCurrency.get(c) / 100, c))}</dd></div>`).join("")}</dl>
+          <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${esc(F.money(byCurrency.get(c) / 100, c))}${c === "HUF" ? ""
+            : `<br><span class="muted">≈ ${esc(F.money(hufByCurrency.get(c) / 100, "HUF"))}</span>`}</dd></div>`).join("")}</dl>
         <div class="card-foot">${esc(t("ov.curNote"))}</div></section>
     </div>
     <div class="grid-2">
@@ -985,7 +999,7 @@ function renderOverview(main) {
 function moversCard() {
   const head = `<div class="card-head"><h2>${esc(t("ov.movers", { p: P.short }))}</h2><span class="sub">${esc(`${amtWord()}, HUF`)}</span></div>`;
   if (!P.prevFrom) return `<section class="card">${head}<div class="empty-state">${esc(t("sales.noCompare"))}</div></section>`;
-  const diffs = S.customers.map((c) => ({ c, v: c.st.ytd.get("HUF") || 0, p: c.st.prev.get("HUF") || 0 })).map((x) => ({ ...x, d: x.v - x.p }));
+  const diffs = S.customers.map((c) => ({ c, v: c.st.hufCur, p: c.st.hufPrev })).map((x) => ({ ...x, d: x.v - x.p }));
   const up = diffs.filter((x) => x.d > 0).sort((a, b) => b.d - a.d).slice(0, 5);
   const down = diffs.filter((x) => x.d < 0).sort((a, b) => a.d - b.d).slice(0, 5);
   const money = (c) => compactMoney(c / 100, "HUF");
@@ -1005,7 +1019,7 @@ function lostCard() {
   if (!P.prevFrom) return `<section class="card">${head()}<div class="empty-state">${esc(t("sales.noCompare"))}</div></section>`;
   const lost = S.customers.filter((c) => c.st.prevCount && !c.st.ytdCount && !c.st.ytdCredits)
     .map((c) => ({ c, p: c.st.prev.get(c.st.cur) || 0, last: c.invoices.find((i) => i.date)?.date }))
-    .sort((a, b) => (b.c.st.prev.get("HUF") || 0) - (a.c.st.prev.get("HUF") || 0) || b.p - a.p);
+    .sort((a, b) => b.c.st.hufPrev - a.c.st.hufPrev);
   return `<section class="card">${head(lost.length)}
     ${lost.length ? `<div class="table-wrap plain" style="max-height:420px;overflow:auto"><table>
       <thead><tr><th>${esc(t("off.customer"))}</th><th>${esc(t("col.manager"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th>${esc(t("ov.lastInvoice"))}</th></tr></thead>
