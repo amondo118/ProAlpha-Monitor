@@ -73,9 +73,9 @@ the raw code without warnings.
 | View | Content |
 |---|---|
 | Top bar | Search by customer number or name (suggestions; Enter opens the customer); **period picker**; **Nettó / Bruttó** switch (every amount on every page follows it; the ⚠ control totals stay net); data date, MINTA tag |
-| Áttekintés | With invoices: sales this year and last month (vs the previous year), active customers, new customers, customers without Ügyintéző; monthly sales vs the previous year; top customers; sales by Ügyintéző, industry and region (net, HUF invoices); sales per currency; new customers per month and the latest ones. Without invoices: the customer statistics |
+| Áttekintés | With invoices: sales in the period and last month (vs the previous period / month), active customers, new customers, customers without Ügyintéző; sales by period vs the previous period; top customers; sales by Ügyintéző, industry and region (net, HUF invoices); sales per currency; new customers per month and the latest ones. Without invoices: the customer statistics |
 | Vevők | All customers (default columns: name, industry, Ügyintéző, tax no., currency, payment terms, sales this year, country, region, city) with filters and CSV export |
-| Ügyintéző page | Like the customer page: sales this year and last month vs the previous year, active and new customers, sales chart (year/half/quarter/month), their customers with sales and change, sales per currency and industry, latest new customers |
+| Ügyintéző page | Like the customer page: sales in the period and last month vs the previous period / month, active and new customers, sales chart (year/half/quarter/month), their customers with sales and change, sales per currency and industry, latest new customers |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
 | Értékesítés (Sales) | Button groups for range, time breakdown and net/gross; one large button per currency showing its total (currencies are never added). Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
 | ⚙ Settings | Shared periods and fiscal year start (read from `config/idoszakok.toml`); per browser: custom periods (name + dates, shown in the period picker), the “new customer” window (days), theme, language, reset column layouts / welcome / everything |
@@ -144,9 +144,16 @@ all time, shared periods and custom periods. The choice is remembered per browse
 - **Custom periods** for one browser only are added in ⚙ Settings.
 - A period reaching past today ends today.
 
-Every figure is compared with the same period one year earlier; for periods longer
-than a year with the equally long period before it (so the two never overlap);
-"all time" has no comparison.
+Periods: last 1 / 2 months, this / last quarter, this / last half year, this year,
+last 12 months, last year, all time, plus shared and custom ones.
+
+Every figure is compared with the period right before it, of the same kind: last
+month with the month before, this quarter so far with the same days of the previous
+quarter, this year so far with last year up to the same day. Custom dates that are
+whole months go back by that many months, other ranges to the equally long range
+right before. The two never overlap; "all time" has no comparison. In charts the
+n-th bar of the previous period stands next to the n-th bar of the current one.
+The "last month" tile compares with the month before.
 
 ## How the numbers are verified
 

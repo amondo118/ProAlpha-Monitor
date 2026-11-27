@@ -68,10 +68,29 @@ applyNewDays();
 
 /* ---------- the viewed period (top bar) ----------
    Every "this period" figure on the site uses P: sales, active customers, new
-   customers, offers… and compares with P.prevFrom–P.prevTo: the same period one
-   year earlier, or for periods longer than a year the equally long period
-   before it (so the two never overlap). */
-const PERIOD_KEYS = ["ytd", "12m", "q", "pq", "h", "ph", "ly", "2y", "3y", "all"];
+   customers, offers… and compares with P.prevFrom–P.prevTo: the period right
+   before it, of the same kind (last month <- the month before, this quarter so
+   far <- the same days of the previous quarter, this year so far <- last year
+   to the same day). The two never overlap. */
+const PERIOD_KEYS = ["1m", "2m", "q", "pq", "h", "ph", "ytd", "12m", "ly", "all"];
+
+/* Calendar month arithmetic; a month-end stays a month-end (30 Jun - 6 months = 31 Dec). */
+function addMonthsIso(iso, n) {
+  const y = +iso.slice(0, 4), m = +iso.slice(5, 7) - 1, d = +iso.slice(8, 10);
+  const lastDay = new Date(y, m + 1, 0).getDate(), targetLast = new Date(y, m + n + 1, 0).getDate();
+  return isoDate(new Date(y, m + n, d === lastDay ? targetLast : Math.min(d, targetLast)));
+}
+/* The comparison period: `months` back for month-based periods; whole calendar
+   months (or from the 1st to today) count as month-based too; anything else is
+   compared with the equally long period right before it. */
+function prevRange(from, to, months = null) {
+  const monthEnd = to === addDays(addMonthsIso(`${to.slice(0, 8)}01`, 1), -1);
+  if (months == null && from.slice(8) === "01" && (monthEnd || to === TODAY))
+    months = (+to.slice(0, 4) - +from.slice(0, 4)) * 12 + (+to.slice(5, 7) - +from.slice(5, 7)) + 1;
+  if (months) return { prevFrom: addMonthsIso(from, -months), prevTo: addMonthsIso(to, -months) };
+  const prevTo = addDays(from, -1);
+  return { prevFrom: addDays(prevTo, -daysBetween(from, to)), prevTo };
+}
 let P = null;
 const inCur = (d) => !!d && d >= P.from && d <= P.to;
 const inPrev = (d) => !!d && !!P.prevFrom && d >= P.prevFrom && d <= P.prevTo;
@@ -91,22 +110,24 @@ function periodRange(key) {
   const fq = Math.floor(into / 3), fh = Math.floor(into / 6);
   const roman = (n) => (LANG === "hu" ? ["I", "II", "III", "IV"][n - 1] : n);
   const part = (kind, y, n) => (F0 === 0 ? t(`period.${kind}`, { y, n: roman(n) }) : t(`per.f${kind}`, { y: fyName(y), n: roman(n) }));
-  if (key === "12m") return { from: D(YEAR, m - 11, 1), to: TODAY, short: t("per.short.12m") };
-  if (key === "q") return { from: D(fy, F0 + fq * 3, 1), to: TODAY, short: part("quarter", fy, fq + 1) };
+  if (key === "1m" || key === "2m") {
+    const n = +key[0];
+    return { from: addDays(addMonthsIso(TODAY, -n), 1), to: TODAY, short: t(`per.short.${key}`), months: n };
+  }
+  if (key === "12m") return { from: D(YEAR, m - 11, 1), to: TODAY, short: t("per.short.12m"), months: 12 };
+  if (key === "q") return { from: D(fy, F0 + fq * 3, 1), to: TODAY, short: part("quarter", fy, fq + 1), months: 3 };
   if (key === "pq") {
     const y = fq === 0 ? fy - 1 : fy, n = fq === 0 ? 4 : fq;
-    return { from: D(y, F0 + (n - 1) * 3, 1), to: D(y, F0 + n * 3, 0), short: part("quarter", y, n) };
+    return { from: D(y, F0 + (n - 1) * 3, 1), to: D(y, F0 + n * 3, 0), short: part("quarter", y, n), months: 3 };
   }
-  if (key === "h") return { from: D(fy, F0 + fh * 6, 1), to: TODAY, short: part("half", fy, fh + 1) };
+  if (key === "h") return { from: D(fy, F0 + fh * 6, 1), to: TODAY, short: part("half", fy, fh + 1), months: 6 };
   if (key === "ph") {
     const y = fh === 0 ? fy - 1 : fy, n = fh === 0 ? 2 : 1;
-    return { from: D(y, F0 + (n - 1) * 6, 1), to: D(y, F0 + n * 6, 0), short: part("half", y, n) };
+    return { from: D(y, F0 + (n - 1) * 6, 1), to: D(y, F0 + n * 6, 0), short: part("half", y, n), months: 6 };
   }
-  if (key === "ly") return { from: D(fy - 1, F0, 1), to: D(fy, F0, 0), short: fyName(fy - 1) };
-  if (key === "2y") return { from: D(fy - 1, F0, 1), to: TODAY, short: `${fyName(fy - 1)} – ${fyName(fy)}` };
-  if (key === "3y") return { from: D(fy - 2, F0, 1), to: TODAY, short: `${fyName(fy - 2)} – ${fyName(fy)}` };
+  if (key === "ly") return { from: D(fy - 1, F0, 1), to: D(fy, F0, 0), short: fyName(fy - 1), months: 12 };
   if (key === "all") return { from: S.firstDate || D(fy, F0, 1), to: TODAY, short: t("per.short.all") };
-  if (key === "ytd") return { from: D(fy, F0, 1), to: TODAY, short: F0 === 0 ? t("per.short.ytd") : fyName(fy) };
+  if (key === "ytd") return { from: D(fy, F0, 1), to: TODAY, short: F0 === 0 ? t("per.short.ytd") : fyName(fy), months: 12 };
   const c = key.startsWith("s:") ? sharedPeriods().find((x) => `s:${x.id}` === key)
     : CUSTOM_PERIODS.find((x) => `c:${x.id}` === key);
   return c ? { from: c.from, to: c.to, short: c.name, name: c.name } : null;
@@ -117,11 +138,8 @@ function buildPeriod(key) {
   // a period reaching into the future ends today (there is no data after today,
   // and the comparison would otherwise span the whole future length)
   if (r.to > TODAY && r.from <= TODAY) r = { ...r, to: TODAY };
-  const span = daysBetween(r.from, r.to) + 1;
-  const shift = key === "all" ? 0 : Math.max(1, Math.ceil(span / 366));
-  return { key, from: r.from, to: r.to, shift,
-    prevFrom: shift ? shiftIsoYear(r.from, -shift) : null, prevTo: shift ? shiftIsoYear(r.to, -shift) : null,
-    short: r.short, name: r.name };
+  const prev = key === "all" ? { prevFrom: null, prevTo: null } : prevRange(r.from, r.to, r.months);
+  return { key, from: r.from, to: r.to, ...prev, short: r.short, name: r.name };
 }
 function periodOptionLabel(key) {
   const r = periodRange(key);
@@ -882,11 +900,12 @@ function renderOverview(main) {
 
   // ---- With invoices: the sales dashboard (net, HUF invoices; other currencies on the Sales tab) ----
   const lmStart = isoDate(new Date(YEAR, NOW.getMonth() - 1, 1));
-  const lmKey = periodKey(lmStart, "month"), lmPrevKey = shiftKeyYear(lmKey, -1);
+  const lmKey = periodKey(lmStart, "month"), lmPrevKey = periodKey(addMonthsIso(lmStart, -1), "month");
   // sales chart over the viewed period, breakdown by its length, vs the comparison period
   const g = autoGran(P.from, P.to);
   const keys = periodKeys(P.from, P.to, g);
   const per = new Map(keys.map((k) => [k, { v: 0, prev: 0 }]));
+  const { prevKeys, toCur } = prevBuckets(keys, P.prevFrom, P.prevTo, g);
   let ytd = 0, prevYtdSales = 0, lm = 0, lmPrev = 0;
   const active = new Set(), activePrev = new Set();
   const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), curCount = new Map();
@@ -907,7 +926,7 @@ function renderOverview(main) {
     if (km === lmKey) lm += v;
     if (km === lmPrevKey) lmPrev += v;
     if (inCur(i.date) && per.has(k)) per.get(k).v += v;
-    if (inPrev(i.date)) { const row = per.get(shiftKeyYear(k, P.shift)); if (row) row.prev += v; }
+    if (inPrev(i.date)) { const row = per.get(toCur.get(k)); if (row) row.prev += v; }
   }
   const money = (v) => compactMoney(v, "HUF");
   const salesItems = (map, param, label) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN).map(([k, v]) => ({
@@ -957,7 +976,7 @@ function renderOverview(main) {
       ${latestCard}
     </div>`;
   drawPeriodChart($("#ov-monthly"), { keys, g, values: keys.map((k) => per.get(k).v / 100), prev: P.prevFrom ? keys.map((k) => per.get(k).prev / 100) : null,
-    cur: "HUF", mode: "compare", label: t("ov.monthly"), shift: P.shift, href: (k) => bucketHref(k, g, { cur: "HUF" }, P) });
+    prevKeys, cur: "HUF", mode: "compare", label: t("ov.monthly"), href: (k) => bucketHref(k, g, { cur: "HUF" }, P) });
   drawMonthly($("#monthly"), all);
 }
 
@@ -1095,7 +1114,7 @@ function renderManager(main) {
   const deltaText = (a, b, k = "cust.vsPrev") => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(t(k, { pct: F.signedPct((a - b) / Math.abs(b)) }))}</span>` : "");
 
   // last month (HUF), active customers, industries, top customer
-  const lmKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 1, 1)), "month"), lmPrevKey = shiftKeyYear(lmKey, -1);
+  const lmKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 1, 1)), "month"), lmPrevKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 2, 1)), "month");
   let lm = 0, lmPrev = 0;
   const byIndustry = new Map();
   for (const i of m.invoices) {
@@ -1474,8 +1493,13 @@ function periodKeys(from, to, g) {
   for (let k = periodKey(from, g); periodStart(k, g) <= to && keys.length < 4000; k = periodKey(nextPeriodStart(k, g), g)) keys.push(k);
   return keys;
 }
-const shiftKeyYear = (key, n) => `${+key.slice(0, 4) + n}${key.slice(4)}`;
-const shiftIsoYear = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setFullYear(d.getFullYear() + n); return isoDate(d); };
+/* Comparison buckets: the n-th bucket of the previous period pairs with the n-th
+   of the current one. Returns the previous keys and a key -> current key map. */
+function prevBuckets(keys, prevFrom, prevTo, g) {
+  if (!prevFrom) return { prevKeys: null, toCur: new Map() };
+  const prevKeys = periodKeys(prevFrom, prevTo, g).slice(0, keys.length);
+  return { prevKeys, toCur: new Map(prevKeys.map((k, i) => [k, keys[i]])) };
+}
 const ROMAN = ["I", "II", "III", "IV"];
 function periodLabel(key, g, short = false) {
   const y = key.slice(0, 4), n = +key.slice(6);
@@ -1503,7 +1527,7 @@ function bucketHref(key, g, extra = {}, clip = null) {
   q.set("to", to);
   return `#sales?${q}`;
 }
-function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270, shift = 1, href = null }) {
+function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, cur, mode = "highlight", label = "", height = 270, href = null }) {
   const n = keys.length;
   const W = Math.max(300, host.clientWidth), H = height;
   const m = { l: 56, r: 8, t: 24, b: 30 };
@@ -1541,7 +1565,7 @@ function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "high
     }
     const tipLines = [periodLabel(k, g), F.money(values[i], cur)];
     if (prev) {
-      tipLines.push(`${t("sales.prevYear")} (${periodLabel(shiftKeyYear(k, -shift), g)}): ${F.money(prev[i], cur)}`);
+      tipLines.push(`${t("sales.prevYear")}${prevKeys?.[i] ? ` (${periodLabel(prevKeys[i], g)})` : ""}: ${F.money(prev[i], cur)}`);
       if (prev[i]) tipLines.push(`${t("sales.col.change")}: ${F.signedPct((values[i] - prev[i]) / Math.abs(prev[i]))}`);
     }
     const link = href ? href(k) : null;
@@ -1556,14 +1580,13 @@ function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "high
 const BREAKDOWNS = ["customer", "manager", "region", "industry", "country", "clerk"];
 
 /* The sales tab shows the period picked in the top bar, unless custom dates are
-   set here. Comparison: shifted back like everywhere else (P.shift years). */
+   set here. Comparison: the period right before it, like everywhere else. */
 function salesRange(p) {
   if (p.get("from") || p.get("to")) {
     const from = p.get("from") || S.firstDate || TODAY, to = p.get("to") || TODAY;
-    const shift = Math.max(1, Math.ceil((daysBetween(from, to) + 1) / 366));
-    return { from, to, shift, prevFrom: shiftIsoYear(from, -shift), prevTo: shiftIsoYear(to, -shift), custom: true };
+    return { from, to, ...prevRange(from, to), custom: true };
   }
-  return { from: P.from, to: P.to, shift: P.shift, prevFrom: P.prevFrom, prevTo: P.prevTo, custom: false };
+  return { from: P.from, to: P.to, prevFrom: P.prevFrom, prevTo: P.prevTo, custom: false };
 }
 /* A sensible time breakdown for the length of the range */
 function autoGran(from, to) {
@@ -1709,10 +1732,11 @@ function drawSales(host, currencies) {
     (!p.get("pm") || pmKey(c) === p.get("pm")) && (!p.get("region") || c.regionLabel === p.get("region")) &&
     (!p.get("industry") || c.industryLabel === p.get("industry")) && (!p.get("country") || c.country === p.get("country")) &&
     words.every((w) => c._s.includes(w));
-  const pFrom = range.prevFrom, pTo = range.prevTo, shift = range.shift;
+  const pFrom = range.prevFrom, pTo = range.prevTo;
 
   const keys = periodKeys(range.from, range.to, g);
   const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
+  const { prevKeys, toCur } = prevBuckets(keys, pFrom, pTo, g);
   const groups = new Map(), byCur = new Map();
   let total = 0, prevTotal = 0, count = 0, credits = 0, positive = 0;
   const list = [];
@@ -1735,7 +1759,7 @@ function drawSales(host, currencies) {
       if (i.credit) credits++; else { count++; grp.n++; positive += v; }
     }
     if (inPrev) {
-      const row = per.get(shiftKeyYear(periodKey(i.date, g), shift));
+      const row = per.get(toCur.get(periodKey(i.date, g)));
       if (row) row.prev += v;
       prevTotal += v; grp.prev += v;
     }
@@ -1788,7 +1812,7 @@ function drawSales(host, currencies) {
     </section>`;
 
   drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: pFrom ? periods.map((r) => r.prev / 100) : null,
-    cur, mode: "compare", label: t("sales.chart"), height: 240, shift, href: (k) => bucketHref(k, g, keep, range) });
+    prevKeys, cur, mode: "compare", label: t("sales.chart"), height: 240, href: (k) => bucketHref(k, g, keep, range) });
   const rows = [...groups.values()].filter((r) => r.v || r.prev);
   drawTable($("#sales-by", host), {
     id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
