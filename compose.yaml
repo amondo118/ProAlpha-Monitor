@@ -8,6 +8,13 @@ name: proalpha-monitor
 services:
   web:
     build: ./web
+    environment:
+      TZ: "${TZ:-Europe/Budapest}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     ports:
       - "${WEB_PORT:-8080}:80"
     volumes:
@@ -18,7 +25,9 @@ services:
     build: ./importer
     environment:
       IMPORT_INTERVAL: "${IMPORT_INTERVAL:-60}"   # seconds between checks for new exports
+      STABLE_SECONDS: "${STABLE_SECONDS:-60}"     # skip files changed this recently (still being written)
       CONFIG_DIR: /app/config
+      TZ: "${TZ:-Europe/Budapest}"                # log timestamps in local time
     volumes:
       # Hand-edited column names and code lists. Changes are picked up automatically.
       - ./config:/app/config:ro,z

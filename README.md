@@ -31,6 +31,9 @@ code. The page shows a **MINTA** tag and a notice.
 
 ## Deploy (production, AlmaLinux)
 
+Step-by-step guide (Hungarian), from installing Docker to updates and troubleshooting:
+**[DEPLOY.md](DEPLOY.md)**. In short:
+
 ```bash
 git clone <repo-url> /srv/dashboard
 cd /srv/dashboard

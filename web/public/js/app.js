@@ -212,7 +212,7 @@ const S = {
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(`${url}: HTTP ${res.status}`), { status: res.status });
   return res.json();
 }
 
@@ -227,9 +227,11 @@ async function load() {
     renderPeriodSelect();
     route();
   } catch (e) {
+    $("#freshness").textContent = t("nodata");
+    // 404: the importer has not written anything yet (e.g. a new server waiting for the first export)
+    if (e.status === 404) { showBanner(t("banner.noImport")); return; }
     console.error(e);
     showBanner(t("banner.loadError", { msg: e.message }), true);
-    $("#freshness").textContent = t("nodata");
   }
 }
 

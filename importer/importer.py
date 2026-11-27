@@ -311,6 +311,18 @@ def run_import(files):
         log(f"  warning: {w}")
 
 
+def drop_fake_data():
+    """Production without exports yet: remove sample data a development run may have
+    left in the data volume, so fake numbers never show up as real ones."""
+    try:
+        if json.loads((OUT / "meta.json").read_text(encoding="utf-8")).get("fake"):
+            for name in ("meta.json", "data.json"):
+                (OUT / name).unlink(missing_ok=True)
+            log("Removed sample data left from a development run")
+    except (FileNotFoundError, ValueError):
+        pass
+
+
 def main():
     log(f"Importer started: exports={EXPORTS} config={CONFIG} out={OUT} interval={INTERVAL}s fake={FAKE}")
     last = None
@@ -325,6 +337,7 @@ def main():
                 if files or FAKE:
                     run_import(files)
                 else:
+                    drop_fake_data()
                     log(f"Waiting: no export files in {EXPORTS}")
                 last = fp
         except Exception as e:  # keep running; the last good data stays online
