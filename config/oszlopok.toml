@@ -97,6 +97,9 @@ kind            = "SzlT"               # számlatípus (Számla, Jóváírás, �
 cancelled       = "Sto"                # sztornózva (Igen/Nem)
 origin          = "BF"                 # bizonylatfajta: R = számla, A = ajánlat, L = szállítólevél, …
 clerk           = "Ügyintéző"          # a bizonylatot kiállító felhasználó (párosítás: kodlistak.toml [ugyintezok])
+rate            = "Valutaárf."         # árfolyam: 1 deviza hány forint (HUF számlán 1); ebből lesz a forintra átváltott összeg
+# Ha az export egyszer saját forint-összeget ad (pl. "Végösszeg IP" kitöltve), az árfolyam helyett az is használható:
+# net_local     = "Végösszeg IP"
 # Fizetési adat (kiegyenlítés dátuma) nincs a számlafej-exportban, ezért a
 # nyitott számlák nézet ki van kapcsolva. Ha lesz ilyen oszlop:
 # cleared       = "…"
