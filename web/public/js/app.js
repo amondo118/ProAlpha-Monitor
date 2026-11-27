@@ -1077,7 +1077,25 @@ function renderManagers(main) {
       ${S.hasInvoices ? tile(t("kpi.salesYtd", { p: P.short }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
       ${S.hasOffers ? tile(t("off.kpi", { p: P.short }), esc(F.num(managers.reduce((s, m) => s + m.offersYtd, 0))), esc(t("off.kpiSub", { n: F.num(managers.reduce((s, m) => s + m.offersPrev, 0)) }))) : ""}
       ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
-    </section>`);
+    </section>
+    ${managerCharts(named)}`);
+}
+
+/* Three small charts above the Ügyintézők table: sales (HUF), offers, active
+   customers in the viewed period; each bar's tooltip has the previous period. */
+function managerCharts(named) {
+  if (!S.hasInvoices) return "";
+  const pct = (a, b) => (b ? ` (${F.signedPct((a - b) / Math.abs(b))})` : "");
+  const items = (value, prev, fmt) => named.map((m) => ({ m, v: value(m), p: prev(m) })).filter((x) => x.v || x.p)
+    .sort((a, b) => b.v - a.v).map(({ m, v, p }) => ({ label: pmLink(m.key), value: v,
+      tip: `${pmName(m.key)}\n${P.short}: ${fmt(v)}\n${t("sales.prevYear")}: ${fmt(p)}${pct(v, p)}` }));
+  const money = (v) => compactMoney(v, "HUF"), pcs = (v) => t("off.pcs", { n: F.num(v) }), num = (v) => F.num(v);
+  const card = (title, sub, body) => `<section class="card"><div class="card-head"><h2>${esc(title)}</h2><span class="sub">${esc(sub)}</span></div>${body}</section>`;
+  return `<div class="${S.hasOffers ? "grid-3" : "grid-2"}">
+    ${card(t("ov.byManager", { p: P.short }), `${amtWord()}, HUF`, hbars(items((m) => hufOf(m.ytd), (m) => hufOf(m.prev), money), money))}
+    ${S.hasOffers ? card(t("off.byManager", { p: P.short }), t("mgr.chart.offersSub"), hbars(items((m) => m.offersYtd, (m) => m.offersPrev, pcs), pcs)) : ""}
+    ${card(t("mgr.chart.active", { p: P.short }), t("mgr.chart.activeSub"), hbars(items((m) => m.active, (m) => m.activePrev, num), num))}
+  </div>`;
 }
 
 /* Offers of an Ügyintéző in the viewed period: how many, and to whom. The amount is shown
