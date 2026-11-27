@@ -29,7 +29,7 @@ code. The page shows a **MINTA** tag and a notice.
 - Log and warnings: `docker compose logs importer`
 - Look at the fake exports: `python3 importer/fake_data.py some_folder`
 
-## Deploy (production, AlmaLinux)
+## Deploy (production, Debian / Ubuntu)
 
 Step-by-step guide (Hungarian), from installing Docker to updates and troubleshooting:
 **[DEPLOY.md](DEPLOY.md)**. In short:

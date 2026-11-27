@@ -1,7 +1,7 @@
 # Shared setup for development and production.
 #   Development (Fedora):    docker compose up --build
 #                            (compose.override.yaml is merged in automatically)
-#   Production (AlmaLinux):  docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#   Production (Debian/Ubuntu): docker compose -f compose.yaml -f compose.prod.yaml up -d --build
 
 name: proalpha-monitor
 
@@ -31,7 +31,7 @@ services:
     volumes:
       # Hand-edited column names and code lists. Changes are picked up automatically.
       - ./config:/app/config:ro,z
-      # SAP export files land here. Lowercase "z" = SELinux label shared between containers.
+      # SAP export files land here. "z" = shared SELinux label (only matters on SELinux hosts; ignored elsewhere).
       - "${EXPORTS_DIR:-./exports}:/exports:ro,z"
       - dashboard-data:/data
 
