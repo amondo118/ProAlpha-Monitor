@@ -62,6 +62,28 @@ const amtWord = () => t(isGross() ? "sales.gross" : "sales.net");
 const hufAmt = (i) => (i.cur === "HUF" ? amtOf(i) : (isGross() ? (i.gross_local ?? i.net_local) : i.net_local) ?? null);
 const hufVal = (i) => cents(hufAmt(i) ?? 0);
 
+/* A sum over several currencies: cur -> {v: cents in that currency, h: forint cents}.
+   Totals are shown in forints (all currencies converted); the tooltip lists each
+   currency: "HUF: 1 200 000 Ft", "EUR: 3 000,00 EUR = 1 095 000 Ft". */
+const mixAdd = (mix, i) => { let r = mix.get(i.cur); if (!r) mix.set(i.cur, (r = { v: 0, h: 0 })); r.v += val(i); r.h += hufVal(i); return mix; };
+const mixMerge = (into, mix) => { for (const [c, x] of mix) { let r = into.get(c); if (!r) into.set(c, (r = { v: 0, h: 0 })); r.v += x.v; r.h += x.h; } return into; };
+const mixHuf = (mix) => { let s = 0; for (const x of mix.values()) s += x.h; return s; };
+const curRank = (c) => (c === "HUF" ? "0" : c === "EUR" ? "1" : "2" + c);
+function mixLines(mix) {
+  return [...mix.entries()].filter(([, x]) => x.v || x.h).sort((a, b) => curRank(a[0]).localeCompare(curRank(b[0])))
+    .map(([c, x]) => (c === "HUF" ? `HUF: ${F.money(x.v / 100, "HUF")}` : `${c}: ${F.money(x.v / 100, c)} = ${F.money(x.h / 100, "HUF")}`));
+}
+/* Tooltip text for a forint total: the split by currency (nothing to add for HUF only) */
+const mixTip = (mix) => { const l = mixLines(mix); return l.length > 1 || (l.length === 1 && !l[0].startsWith("HUF")) ? l.join("\n") : ""; };
+/* An amount in its own currency; a foreign one shows its forint value on hover */
+function fx(text, cur, hufCents) {
+  if (!cur || cur === "HUF" || hufCents == null) return esc(text);
+  return `<span class="fx" data-tip="${esc(`≈ ${F.money(hufCents / 100, "HUF")}`)}">${esc(text)}</span>`;
+}
+const fxInv = (i) => fx(F.money(amtOf(i), i.cur), i.cur, hufAmt(i) == null ? null : hufVal(i));
+/* A forint total with its currency split on hover */
+const tipWrap = (html, tip) => (tip ? `<span class="fx" data-tip="${esc(tip)}">${html}</span>` : html);
+
 // "New customer" window (days), from the settings
 const PERIOD = {};
 function applyNewDays() {
@@ -308,6 +330,8 @@ function index(data) {
     if (c.country && c.country !== CONFIG.homeCountry) m.foreign++;
     if (c.created && (!m.last || c.created > m.last)) m.last = c.created;
     for (const [cur, v] of c.st.ytd) addTo(m.ytd, cur, v);
+    mixMerge(m.mixCur, c.st.mixCur);
+    mixMerge(m.mixPrev, c.st.mixPrev);
     m.hufCur += c.st.hufCur;
     m.hufPrev += c.st.hufPrev;
     for (const [cur, v] of c.st.prev) addTo(m.prev, cur, v);
@@ -347,14 +371,14 @@ function index(data) {
 
 function newManager(key) {
   return { key, customers: [], count: 0, new30: 0, newYtd: 0, foreign: 0, last: null,
-    ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), hufCur: 0, hufPrev: 0, active: 0, activePrev: 0, invoices: [],
+    ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), mixCur: new Map(), mixPrev: new Map(), hufCur: 0, hufPrev: 0, active: 0, activePrev: 0, invoices: [],
     offers: [], offersYtd: 0, offersPrev: 0, offerCustomers: new Set() };
 }
 
 /* Per-customer invoice figures, per currency in cents. */
 function customerStats(c) {
   const st = { ytd: new Map(), prev: new Map(), total: new Map(), open: new Map(), byYear: new Map(),
-    hufCur: 0, hufPrev: 0, openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
+    mixCur: new Map(), mixPrev: new Map(), mixTotal: new Map(), openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
   const counts = new Map();
   for (const i of c.invoices) {
     const v = val(i);
@@ -370,8 +394,8 @@ function customerStats(c) {
       addTo(st.byYear.get(y), i.cur, v);
       st.firstYear = Math.min(st.firstYear ?? y, y);
       st.lastYear = Math.max(st.lastYear ?? y, y);
-      if (inCur(i.date)) { addTo(st.ytd, i.cur, v); st.hufCur += hufVal(i); }
-      if (inPrev(i.date)) { addTo(st.prev, i.cur, v); st.hufPrev += hufVal(i); }
+      if (inCur(i.date)) { addTo(st.ytd, i.cur, v); mixAdd(st.mixCur, i); }
+      if (inPrev(i.date)) { addTo(st.prev, i.cur, v); mixAdd(st.mixPrev, i); }
     }
     if (i.open) {
       addTo(st.open, i.cur, v);
@@ -379,6 +403,10 @@ function customerStats(c) {
       if (i.daysOverdue > 0) st.overdueN++;
     }
   }
+  for (const i of c.invoices) mixAdd(st.mixTotal, i);
+  st.hufCur = mixHuf(st.mixCur);
+  st.hufPrev = mixHuf(st.mixPrev);
+  st.hufTotal = mixHuf(st.mixTotal);
   // Main currency: the customer's own, else the one most invoices use
   st.cur = c.currency || [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "HUF";
   st.main = (map) => (map.get(st.cur) || 0) / 100;
@@ -918,9 +946,11 @@ function renderOverview(main) {
   // sales chart over the viewed period, breakdown by its length, vs the comparison period
   const g = autoGran(P.from, P.to);
   const keys = periodKeys(P.from, P.to, g);
-  const per = new Map(keys.map((k) => [k, { v: 0, prev: 0 }]));
+  const per = new Map(keys.map((k) => [k, { v: 0, prev: 0, mix: new Map(), mixPrev: new Map() }]));
   const { prevKeys, toCur } = prevBuckets(keys, P.prevFrom, P.prevTo, g);
   let ytd = 0, prevYtdSales = 0, lm = 0, lmPrev = 0;
+  const curMix = new Map(), lmMix = new Map(), byIndustryMix = new Map(), byRegionMix = new Map();
+  const mixOf = (map, key) => map.get(key) || map.set(key, new Map()).get(key);
   const active = new Set(), activePrev = new Set();
   const byIndustry = new Map(), byRegion = new Map(), byCurrency = new Map(), hufByCurrency = new Map(), curCount = new Map();
   for (const i of S.invoices) {
@@ -935,23 +965,28 @@ function renderOverview(main) {
     const v = hufVal(i), k = periodKey(i.date, g), km = periodKey(i.date, "month");
     if (inCur(i.date)) {
       ytd += v;
+      mixAdd(curMix, i);
       addTo(byIndustry, i.c.industryLabel || "", v);
       addTo(byRegion, i.c.regionLabel || "", v);
+      mixAdd(mixOf(byIndustryMix, i.c.industryLabel || ""), i);
+      mixAdd(mixOf(byRegionMix, i.c.regionLabel || ""), i);
     } else if (inPrev(i.date)) prevYtdSales += v;
-    if (km === lmKey) lm += v;
+    if (km === lmKey) { lm += v; mixAdd(lmMix, i); }
     if (km === lmPrevKey) lmPrev += v;
-    if (inCur(i.date) && per.has(k)) per.get(k).v += v;
-    if (inPrev(i.date)) { const row = per.get(toCur.get(k)); if (row) row.prev += v; }
+    if (inCur(i.date) && per.has(k)) { per.get(k).v += v; mixAdd(per.get(k).mix, i); }
+    if (inPrev(i.date)) { const row = per.get(toCur.get(k)); if (row) { row.prev += v; mixAdd(row.mixPrev, i); } }
   }
   const money = (v) => compactMoney(v, "HUF");
-  const salesItems = (map, param, label) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN).map(([k, v]) => ({
+  // tooltip: name, forint total, share, then the split by currency
+  const itemTip = (name, v, mix) => [name, F.money(v / 100, "HUF"), F.pct(ytd ? v / ytd : 0), mixTip(mix)].filter(Boolean).join("\n");
+  const salesItems = (map, mixes, param, label) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN).map(([k, v]) => ({
     label: k ? `<a href="#sales?${param}=${encodeURIComponent(k)}">${esc(label(k))}</a>` : `<span class="muted">${esc(t("none"))}</span>`,
-    value: v / 100, tip: `${k ? label(k) : t("none")}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}`,
+    value: v / 100, tip: itemTip(k ? label(k) : t("none"), v, mixes.get(k) || new Map()),
   }));
   const topCustomers = all.map((c) => [c, c.st.hufCur]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, CONFIG.topN)
-    .map(([c, v]) => ({ label: custLink(c), value: v / 100, tip: `${c.name}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
+    .map(([c, v]) => ({ label: custLink(c), value: v / 100, tip: itemTip(c.name, v, c.st.mixCur) }));
   const managerSales = [...S.managers.values()].filter((m) => m.key !== NONE).map((m) => [m, m.hufCur]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
-    .map(([m, v]) => ({ label: pmLink(m.key), value: v / 100, tip: `${pmName(m.key)}\n${F.money(v / 100, "HUF")}\n${F.pct(ytd ? v / ytd : 0)}` }));
+    .map(([m, v]) => ({ label: pmLink(m.key), value: v / 100, tip: itemTip(pmName(m.key), v, m.mixCur) }));
   const lmLabel = F.monthYear(lmKey);
   const offersYtd = S.offers.filter((o) => inCur(o.date)).length;
   const offersPrev = S.offers.filter((o) => inPrev(o.date)).length;
@@ -960,8 +995,8 @@ function renderOverview(main) {
 
   main.innerHTML = `
     <section class="kpis">
-      ${tile("#sales", t("kpi.salesYtd", { p: P.short }), big(ytd / 100), deltaHtml(ytd, prevYtdSales), true)}
-      ${tile(`#sales?from=${lmStart}&to=${addDays(periodStart(periodKey(TODAY, "month"), "month"), -1)}&g=day`, t("ov.lastMonth", { month: lmLabel }), big(lm / 100), deltaHtml(lm, lmPrev, "ov.vsPrevMonth"))}
+      ${tile("#sales", t("kpi.salesYtd", { p: P.short }), tipWrap(big(ytd / 100), mixTip(curMix)), deltaHtml(ytd, prevYtdSales), true)}
+      ${tile(`#sales?from=${lmStart}&to=${addDays(periodStart(periodKey(TODAY, "month"), "month"), -1)}&g=day`, t("ov.lastMonth", { month: lmLabel }), tipWrap(big(lm / 100), mixTip(lmMix)), deltaHtml(lm, lmPrev, "ov.vsPrevMonth"))}
       ${tile("#sales?by=customer", t("ov.active", { p: P.short }), esc(F.num(active.size)), esc(t("ov.activeSub", { n: F.num(activePrev.size) })))}
       ${S.hasOffers ? tile("#managers?sort=-offers", t("off.kpi", { p: P.short }), esc(F.num(offersYtd)), esc(t("off.kpiSub", { n: F.num(offersPrev) }))) : ""}
       ${customerTiles}
@@ -979,11 +1014,11 @@ function renderOverview(main) {
         ${hbars(offerTop, (v) => t("off.pcs", { n: F.num(v) }))}<div class="card-foot">${esc(t("off.note"))}</div></section>` : ""}
     </div>
     <div class="grid-3">
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { p: P.short }))}</h2></div>${hbars(salesItems(byIndustry, "industry", (k) => k), money)}</section>
-      <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { p: P.short }))}</h2></div>${hbars(salesItems(byRegion, "region", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { p: P.short }))}</h2></div>${hbars(salesItems(byIndustry, byIndustryMix, "industry", (k) => k), money)}</section>
+      <section class="card"><div class="card-head"><h2>${esc(t("ov.byRegion", { p: P.short }))}</h2></div>${hbars(salesItems(byRegion, byRegionMix, "region", (k) => k), money)}</section>
       <section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { p: P.short }))}</h2></div>
         <dl class="rows">${currencyOrder().filter((c) => byCurrency.has(c)).map((c) => `<div><dt><a href="#sales?cur=${encodeURIComponent(c)}"><b>${esc(c)}</b></a>
-          <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${esc(F.money(byCurrency.get(c) / 100, c))}${c === "HUF" ? ""
+          <span class="muted"> · ${esc(t("ov.invoicesN", { n: F.num(curCount.get(c) || 0) }))}</span></dt><dd>${fx(F.money(byCurrency.get(c) / 100, c), c, hufByCurrency.get(c))}${c === "HUF" ? ""
             : `<br><span class="muted">≈ ${esc(F.money(hufByCurrency.get(c) / 100, "HUF"))}</span>`}</dd></div>`).join("")}</dl>
         <div class="card-foot">${esc(t("ov.curNote"))}</div></section>
     </div>
@@ -992,7 +1027,8 @@ function renderOverview(main) {
       ${lostCard()}
     </div>`;
   drawPeriodChart($("#ov-monthly"), { keys, g, values: keys.map((k) => per.get(k).v / 100), prev: P.prevFrom ? keys.map((k) => per.get(k).prev / 100) : null,
-    prevKeys, cur: "HUF", mode: "compare", label: t("ov.monthly"), href: (k) => bucketHref(k, g, { cur: "HUF" }, P) });
+    prevKeys, cur: "HUF", mode: "compare", label: t("ov.monthly"), href: (k) => bucketHref(k, g, { cur: "HUF" }, P),
+    tipExtra: (i) => mixLines(per.get(keys[i]).mix).length > 1 ? mixLines(per.get(keys[i]).mix) : [] });
 }
 
 /* Dashboard: customers whose sales (HUF) changed most against the previous period. */
@@ -1003,7 +1039,8 @@ function moversCard() {
   const up = diffs.filter((x) => x.d > 0).sort((a, b) => b.d - a.d).slice(0, 5);
   const down = diffs.filter((x) => x.d < 0).sort((a, b) => a.d - b.d).slice(0, 5);
   const money = (c) => compactMoney(c / 100, "HUF");
-  const row = (x) => `<tr><td class="wrap">${custLink(x.c)}</td><td class="num">${esc(money(x.v))}</td><td class="num muted">${esc(money(x.p))}</td>
+  const row = (x) => `<tr><td class="wrap">${custLink(x.c)}</td><td class="num">${tipWrap(esc(money(x.v)), mixTip(x.c.st.mixCur))}</td>
+    <td class="num muted">${tipWrap(esc(money(x.p)), mixTip(x.c.st.mixPrev))}</td>
     <td class="num"><span class="${x.d >= 0 ? "delta-up" : "delta-down"}">${esc((x.d > 0 ? "+" : "") + money(x.d))}</span></td></tr>`;
   const group = (label, list) => `<tr class="group-row"><th colspan="4">${esc(label)}</th></tr>${list.map(row).join("") || `<tr class="empty-row"><td colspan="4">${esc(t("t.empty"))}</td></tr>`}`;
   return `<section class="card">${head}
@@ -1018,13 +1055,13 @@ function lostCard() {
   const head = (n) => `<div class="card-head"><h2>${esc(t("ov.lost", { p: P.short }))}</h2><span class="sub">${esc(n == null ? "" : t("ov.lostN", { n: F.num(n) }))}</span></div>`;
   if (!P.prevFrom) return `<section class="card">${head()}<div class="empty-state">${esc(t("sales.noCompare"))}</div></section>`;
   const lost = S.customers.filter((c) => c.st.prevCount && !c.st.ytdCount && !c.st.ytdCredits)
-    .map((c) => ({ c, p: c.st.prev.get(c.st.cur) || 0, last: c.invoices.find((i) => i.date)?.date }))
+    .map((c) => ({ c, p: c.st.hufPrev, last: c.invoices.find((i) => i.date)?.date }))
     .sort((a, b) => b.c.st.hufPrev - a.c.st.hufPrev);
   return `<section class="card">${head(lost.length)}
     ${lost.length ? `<div class="table-wrap plain" style="max-height:420px;overflow:auto"><table>
       <thead><tr><th>${esc(t("off.customer"))}</th><th>${esc(t("col.manager"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th>${esc(t("ov.lastInvoice"))}</th></tr></thead>
       <tbody>${lost.map((x) => `<tr><td class="wrap">${custLink(x.c)}</td><td>${pmLink(pmKey(x.c))}</td>
-        <td class="num">${esc(compactMoney(x.p / 100, x.c.st.cur))}</td><td>${esc(F.date(x.last))}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="num">${tipWrap(esc(compactMoney(x.p / 100, "HUF")), mixTip(x.c.st.mixPrev))}</td><td>${esc(F.date(x.last))}</td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty-state">${esc(t("ov.lostNone"))}</div>`}
     <div class="card-foot">${esc(t("ov.lostNote"))}</div></section>`;
 }
@@ -1068,11 +1105,26 @@ function drawMonthly(host, rows) {
 /* ---------- account managers ---------- */
 
 const hufOf = (map) => (map.get("HUF") || 0) / 100;
+/* Sales columns for customers and Ügyintézők: HUF and EUR separately (EUR shows
+   its forint value on hover) and a total in forints of every currency (split on hover). */
+function salesColumns(mixOf, { prev = null } = {}) {
+  const one = (x, cur) => (mixOf(x).get(cur) || { v: 0, h: 0 });
+  return [
+    ...["HUF", "EUR"].map((cur) => ({ key: cur === "HUF" ? "ytdHUF" : "ytdEUR", label: t("mgr.col.ytd", { cur }), num: true,
+      value: (x) => one(x, cur).v / 100 || null, csv: (x) => one(x, cur).v / 100,
+      html: (x) => (one(x, cur).v ? fx(F.money(one(x, cur).v / 100, cur), cur, one(x, cur).h) : `<span class="muted">–</span>`) })),
+    { key: "ytd", label: t("col.totalHuf"), num: true, value: (x) => mixHuf(mixOf(x)) / 100 || null, csv: (x) => mixHuf(mixOf(x)) / 100,
+      html: (x) => (mixHuf(mixOf(x)) ? `<b>${tipWrap(esc(F.money(mixHuf(mixOf(x)) / 100, "HUF")), mixTip(mixOf(x)))}</b>` : `<span class="muted">–</span>`) },
+    ...(prev ? [{ key: "change", label: t("sales.col.change"), num: true,
+      value: (x) => (mixHuf(prev(x)) ? (mixHuf(mixOf(x)) - mixHuf(prev(x))) / Math.abs(mixHuf(prev(x))) : null),
+      html: (x) => `<span title="${esc(`${t("mgr.col.prev")}: ${F.money(mixHuf(prev(x)) / 100, "HUF")}`)}">${changeHtml(mixHuf(mixOf(x)), mixHuf(prev(x)))}</span>` }] : []),
+  ];
+}
 const changeHtml = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
 // Sales figures here are HUF (net); other currencies are listed separately, never added in.
 function managerColumns() {
   const totalCustomers = S.customers.length || 1;
-  const totalHuf = [...S.managers.values()].reduce((s, m) => s + (m.ytd.get("HUF") || 0), 0);
+  const totalHuf = [...S.managers.values()].reduce((s, m) => s + m.hufCur, 0);
   const cols = [
     { key: "name", label: t("col.manager"), value: (m) => pmName(m.key), html: (m) => pmLink(m.key), wrap: true },
     { key: "count", label: t("col.customers"), num: true, value: (m) => m.count,
@@ -1081,12 +1133,11 @@ function managerColumns() {
   if (S.hasInvoices) {
     cols.push(
       { key: "active", label: t("mgr.col.active", { p: P.short }), num: true, value: (m) => m.active },
-      // HUF and EUR side by side, same format; never added together
-      ...["HUF", "EUR"].map((cur) => ({ key: cur === "HUF" ? "ytd" : "ytdEUR", label: t("mgr.col.ytd", { p: P.short, cur }), num: true,
-        value: (m) => (m.ytd.get(cur) || 0) / 100, html: (m) => esc(F.money((m.ytd.get(cur) || 0) / 100, cur)) })),
-      { key: "prev", label: t("mgr.col.prev"), num: true, value: (m) => hufOf(m.prev), html: (m) => `<span class="muted">${esc(F.money(hufOf(m.prev), "HUF"))}</span>` },
-      { key: "salesShare", label: t("mgr.col.share"), num: true, value: (m) => (totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0),
-        html: (m) => esc(F.pct(totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0)) },
+      ...salesColumns((m) => m.mixCur),
+      { key: "prev", label: t("mgr.col.prev"), num: true, value: (m) => m.hufPrev / 100,
+        html: (m) => `<span class="muted">${tipWrap(esc(F.money(m.hufPrev / 100, "HUF")), mixTip(m.mixPrev))}</span>` },
+      { key: "salesShare", label: t("mgr.col.share"), num: true, value: (m) => (totalHuf ? m.hufCur / totalHuf : 0),
+        html: (m) => esc(F.pct(totalHuf ? m.hufCur / totalHuf : 0)) },
       ...(S.hasOffers ? [{ key: "offers", label: t("off.col", { p: P.short }), num: true, value: (m) => m.offersYtd,
         html: (m) => (m.offersYtd ? `<a href="${managerHref(m.key)}" title="${esc(t("off.customersN", { n: F.num(m.offerCustomers.size) }))}">${esc(F.num(m.offersYtd))}</a>` : "0") }] : []),
     );
@@ -1100,7 +1151,7 @@ function managerColumns() {
   );
   return cols;
 }
-const MANAGER_TABLE = "managers-v3";   // new column set: old saved layouts don't apply
+const MANAGER_TABLE = "managers-v4";   // new column set: old saved layouts don't apply
 
 function renderManagers(main) {
   const p = current.params;
@@ -1118,14 +1169,15 @@ function renderManagers(main) {
   // Summary above the table
   const tile = (label, value, sub, hl = false) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const big = (v) => { const x = F.compactParts(v, "HUF"); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
-  const totalYtd = managers.reduce((s, m) => s + hufOf(m.ytd), 0), totalPrev = managers.reduce((s, m) => s + hufOf(m.prev), 0);
+  const totalYtd = managers.reduce((s, m) => s + m.hufCur, 0) / 100, totalPrev = managers.reduce((s, m) => s + m.hufPrev, 0) / 100;
+  const totalMix = managers.reduce((mix, m) => mixMerge(mix, m.mixCur), new Map());
   // A few summary figures above the table (the table is the main content)
   main.insertAdjacentHTML("afterbegin", `
     <section class="kpis kpis-compact">
       ${tile(t("mgr.kpi.count"), esc(F.num(named.length)), esc(t("mgr.kpi.countSub", { n: F.num(S.customers.length) })))}
-      ${S.hasInvoices ? tile(t("kpi.salesYtd", { p: P.short }), big(totalYtd), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
+      ${S.hasInvoices ? tile(t("kpi.salesYtd", { p: P.short }), tipWrap(big(totalYtd), mixTip(totalMix)), changeHtml(totalYtd, totalPrev) + " " + esc(t("mgr.kpi.vsPrev")), true) : ""}
       ${S.hasOffers ? tile(t("off.kpi", { p: P.short }), esc(F.num(managers.reduce((s, m) => s + m.offersYtd, 0))), esc(t("off.kpiSub", { n: F.num(managers.reduce((s, m) => s + m.offersPrev, 0)) }))) : ""}
-      ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(hufOf(none.ytd), "HUF") })) : esc(t("kpi.noManagerSub")))}
+      ${tile(t("kpi.noManager"), esc(F.num(none?.count || 0)), S.hasInvoices && none ? esc(t("mgr.kpi.noneSales", { amount: compactMoney(none.hufCur / 100, "HUF") })) : esc(t("kpi.noManagerSub")))}
     </section>
     ${managerCharts(named)}`);
 }
@@ -1135,13 +1187,13 @@ function renderManagers(main) {
 function managerCharts(named) {
   if (!S.hasInvoices) return "";
   const pct = (a, b) => (b ? ` (${F.signedPct((a - b) / Math.abs(b))})` : "");
-  const items = (value, prev, fmt) => named.map((m) => ({ m, v: value(m), p: prev(m) })).filter((x) => x.v || x.p)
+  const items = (value, prev, fmt, mix = null) => named.map((m) => ({ m, v: value(m), p: prev(m) })).filter((x) => x.v || x.p)
     .sort((a, b) => b.v - a.v).map(({ m, v, p }) => ({ label: pmLink(m.key), value: v,
-      tip: `${pmName(m.key)}\n${P.short}: ${fmt(v)}\n${t("sales.prevYear")}: ${fmt(p)}${pct(v, p)}` }));
+      tip: [pmName(m.key), `${P.short}: ${fmt(v)}`, `${t("sales.prevYear")}: ${fmt(p)}${pct(v, p)}`, mix ? mixTip(mix(m)) : ""].filter(Boolean).join("\n") }));
   const money = (v) => compactMoney(v, "HUF"), pcs = (v) => t("off.pcs", { n: F.num(v) }), num = (v) => F.num(v);
   const card = (title, sub, body) => `<section class="card"><div class="card-head"><h2>${esc(title)}</h2><span class="sub">${esc(sub)}</span></div>${body}</section>`;
   return `<div class="${S.hasOffers ? "grid-3" : "grid-2"}">
-    ${card(t("ov.byManager", { p: P.short }), `${amtWord()}, HUF`, hbars(items((m) => hufOf(m.ytd), (m) => hufOf(m.prev), money), money))}
+    ${card(t("ov.byManager", { p: P.short }), `${amtWord()}, HUF`, hbars(items((m) => m.hufCur / 100, (m) => m.hufPrev / 100, money, (m) => m.mixCur), money))}
     ${S.hasOffers ? card(t("off.byManager", { p: P.short }), t("mgr.chart.offersSub"), hbars(items((m) => m.offersYtd, (m) => m.offersPrev, pcs), pcs)) : ""}
     ${card(t("mgr.chart.active", { p: P.short }), t("mgr.chart.activeSub"), hbars(items((m) => m.active, (m) => m.activePrev, num), num))}
   </div>`;
@@ -1158,7 +1210,7 @@ function offersCard(m) {
     ${list.length ? `<div class="table-wrap plain" style="max-height:360px;overflow:auto"><table>
       <thead><tr><th>${esc(t("col.invDate"))}</th><th>${esc(t("off.number"))}</th><th>${esc(t("off.customer"))}</th><th class="num">${esc(t("off.amount"))}</th></tr></thead>
       <tbody>${shown.map((o) => `<tr><td>${esc(F.date(o.date))}</td><td class="mono">${esc(o.id)}</td><td class="wrap">${custLink(o.c)}</td>
-        <td class="num muted">${amtOf(o) ? esc(F.money(amtOf(o), o.cur)) : "–"}</td></tr>`).join("")}</tbody></table></div>
+        <td class="num muted">${amtOf(o) ? fxInv(o) : "–"}</td></tr>`).join("")}</tbody></table></div>
       ${list.length > shown.length ? `<div class="card-foot">+${esc(F.num(list.length - shown.length))}</div>` : ""}`
       : `<div class="empty-state">${esc(t("off.none"))}</div>`}
     <div class="card-foot">${esc(t("off.note"))}</div>
@@ -1184,21 +1236,22 @@ function renderManager(main) {
   const lmKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 1, 1)), "month"), lmPrevKey = periodKey(isoDate(new Date(YEAR, NOW.getMonth() - 2, 1)), "month");
   let lm = 0, lmPrev = 0;
   const byIndustry = new Map();
+  const lmMix = new Map();
   for (const i of m.invoices) {
-    if (i.cur !== "HUF" || !i.date) continue;
+    if (!i.date) continue;
     const k = periodKey(i.date, "month");
-    if (k === lmKey) lm += val(i);
-    if (k === lmPrevKey) lmPrev += val(i);
-    if (inCur(i.date)) addTo(byIndustry, i.c.industryLabel || "", val(i));
+    if (k === lmKey) { lm += hufVal(i); mixAdd(lmMix, i); }
+    if (k === lmPrevKey) lmPrev += hufVal(i);
+    if (inCur(i.date)) addTo(byIndustry, i.c.industryLabel || "", hufVal(i));
   }
-  const top = [...m.customers].sort((a, b) => (b.st.ytd.get("HUF") || 0) - (a.st.ytd.get("HUF") || 0))[0];
+  const top = [...m.customers].sort((a, b) => b.st.hufCur - a.st.hufCur)[0];
   const topIndustry = [...byIndustry.entries()].sort((a, b) => b[1] - a[1])[0];
   const latest = [...m.customers].filter((c) => c.created).sort((a, b) => b.created.localeCompare(a.created)).slice(0, 6);
   const chip = (label, value, href) => `<a class="chip" href="${href}"><b>${esc(label)}</b>${esc(value)}</a>`;
 
   const kpis = S.hasInvoices ? [
-    tile(t("kpi.salesYtd", { p: P.short }), big(hufOf(m.ytd)), deltaText(hufOf(m.ytd), hufOf(m.prev)), true),
-    tile(t("ov.lastMonth", { month: F.monthYear(lmKey) }), big(lm / 100), deltaText(lm, lmPrev, "ov.vsPrevMonth")),
+    tile(t("kpi.salesYtd", { p: P.short }), tipWrap(big(m.hufCur / 100), mixTip(m.mixCur)), deltaText(m.hufCur, m.hufPrev), true),
+    tile(t("ov.lastMonth", { month: F.monthYear(lmKey) }), tipWrap(big(lm / 100), mixTip(lmMix)), deltaText(lm, lmPrev, "ov.vsPrevMonth")),
     tile(t("ov.active", { p: P.short }), esc(F.num(m.active)), esc(t("mgr.activeSub", { n: F.num(m.activePrev), all: F.num(m.count) }))),
     tile(t("kpi.newYtd"), esc(F.num(m.newYtd)), esc(t("mgr.new30", { n: F.num(m.new30) }))),
   ] : [
@@ -1220,7 +1273,7 @@ function renderManager(main) {
         </div>
       </div>
       <div class="cust-contact">
-        ${S.hasInvoices ? `<div class="eyebrow">${esc(t("mgr.topCustomer", { p: P.short }))}</div><div>${top && top.st.ytd.get("HUF") ? `${custLink(top)} · ${esc(compactMoney(hufOf(top.st.ytd), "HUF"))}` : "–"}</div>
+        ${S.hasInvoices ? `<div class="eyebrow">${esc(t("mgr.topCustomer", { p: P.short }))}</div><div>${top && top.st.hufCur ? `${custLink(top)} · ${tipWrap(esc(compactMoney(top.st.hufCur / 100, "HUF")), mixTip(top.st.mixCur))}` : "–"}</div>
         <div class="eyebrow">${esc(t("mgr.topIndustry", { p: P.short }))}</div><div>${topIndustry ? `${esc(topIndustry[0] || t("none"))} · ${esc(compactMoney(topIndustry[1] / 100, "HUF"))}` : "–"}</div>` : ""}
       </div>
     </section>
@@ -1240,7 +1293,7 @@ function renderManager(main) {
       <div class="stack">
         ${S.hasInvoices ? `<section class="card"><div class="card-head"><h2>${esc(t("ov.byCurrency", { p: P.short }))}</h2></div>
           <dl class="rows">${currencyOrder().filter((c) => m.ytd.has(c)).map((c) => `<div><dt><a href="#sales?cur=${encodeURIComponent(c)}&pm=${encodeURIComponent(key)}"><b>${esc(c)}</b></a></dt>
-            <dd>${esc(F.money(m.ytd.get(c) / 100, c))}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
+            <dd>${fx(F.money(m.ytd.get(c) / 100, c), c, m.mixCur.get(c)?.h)}</dd></div>`).join("") || `<div><dt>${esc(t("t.empty"))}</dt><dd></dd></div>`}</dl></section>
         <section class="card"><div class="card-head"><h2>${esc(t("ov.byIndustry", { p: P.short }))}</h2><span class="sub">${esc(t("mgr.hufShort"))}</span></div>
           ${hbars([...byIndustry.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: esc(k || t("none")), value: v / 100, tip: `${k || t("none")}\n${F.money(v / 100, "HUF")}` })), (v) => compactMoney(v, "HUF"))}</section>` : ""}
         <section class="card"><div class="card-head"><h2>${esc(t("chart.latest"))}</h2></div>
@@ -1249,21 +1302,18 @@ function renderManager(main) {
     </div>`;
 
   if (S.hasInvoices) {
-    drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key });
-    onGranSwitch(main, () => drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key }));
+    drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key }, true);
+    onGranSwitch(main, () => drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key }, true));
   }
-  const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
   const cols = [
     { key: "name", label: t("col.name"), value: (c) => c.name, html: (c) => custLink(c), wrap: true },
     ...(S.hasInvoices ? [
-      { key: "ytd", label: t("col.revenueYtd", { p: P.short }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)) },
-      { key: "change", label: t("sales.col.change"), num: true, value: (c) => (c.st.main(c.st.prev) ? (c.st.main(c.st.ytd) - c.st.main(c.st.prev)) / Math.abs(c.st.main(c.st.prev)) : null),
-        html: (c) => `<span title="${esc(`${t("mgr.col.prev")}: ${money(c, c.st.prev)}`)}">${changeHtml(c.st.main(c.st.ytd), c.st.main(c.st.prev))}</span>` },
+      ...salesColumns((c) => c.st.mixCur, { prev: (c) => c.st.mixPrev }),
       { key: "inv", label: t("mgr.col.invoices", { p: P.short }), num: true, value: (c) => c.st.ytdCount },
     ] : []),
     { key: "industry", label: t("col.industry"), value: (c) => c.industryLabel, html: (c) => codeLabel(c.industry, c.industry_code) },
   ];
-  drawTable($("#mgr-customers"), { id: "manager-customers", columns: cols, rows: m.customers, defaultSort: S.hasInvoices ? "-ytd" : "name", pageSize: 25 });
+  drawTable($("#mgr-customers"), { id: "manager-customers-v2", columns: cols, rows: m.customers, defaultSort: S.hasInvoices ? "-ytd" : "name", pageSize: 25 });
 }
 
 /* ---------- customers list ---------- */
@@ -1280,8 +1330,7 @@ function customerColumns() {
     { key: "terms", label: t("col.paymentTerms"), num: true, value: (c) => c.payment_terms, html: (c) => esc(days(c.payment_terms)) },
   ];
   if (S.hasInvoices) {
-    const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
-    cols.push({ key: "ytd", label: t("col.revenueYtd", { p: P.short }), num: true, value: (c) => c.st.main(c.st.ytd) || null, html: (c) => esc(money(c, c.st.ytd)), csv: (c) => moneyList(c.st.ytd) });
+    cols.push(...salesColumns((c) => c.st.mixCur));
     if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (c) => c.st.main(c.st.open) || null,
       html: (c) => (c.st.openN ? `${c.st.overdueN ? `<span class="pill bad">${c.st.overdueN}</span> ` : ""}${esc(money(c, c.st.open))}` : ""), csv: (c) => moneyList(c.st.open) });
   }
@@ -1293,7 +1342,7 @@ function customerColumns() {
   return cols;
 }
 // New column set: a fresh saved-layout key, so old saved orders don't hide the new default
-const CUSTOMER_TABLE = "customers-v2";
+const CUSTOMER_TABLE = "customers-v3";
 
 function renderCustomers(main) {
   const p = current.params;
@@ -1362,17 +1411,20 @@ function renderCustomer(main) {
     const ytd = st.main(st.ytd), prev = st.main(st.prev);
     const delta = prev ? (ytd - prev) / Math.abs(prev) : null;
     const others = (map) => (st.others(map).size ? `<br>${esc(t("cust.otherCur", { list: moneyList(st.others(map)) }))}` : "");
+    // in forints, all currencies together (only when it isn't just HUF)
+    const hufLine = (mix) => (mixTip(mix) ? `<br>${tipWrap(esc(t("cust.hufTotal", { amount: F.money(mixHuf(mix) / 100, "HUF") })), mixTip(mix))}` : "");
     const yearsSpan = st.firstYear ? (st.firstYear === st.lastYear ? `${st.firstYear}` : `${st.firstYear}–${st.lastYear}`) : "";
     kpis = [
-      kpiTile(t("cust.revenueYtd", { p: P.short }), bigMoney(ytd, st.cur),
-        (delta == null ? esc(t("cust.noPrev")) : `<span class="${delta >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(delta) }))}</span>`) + others(st.ytd), true),
+      kpiTile(t("cust.revenueYtd", { p: P.short }), tipWrap(bigMoney(ytd, st.cur), st.cur === "HUF" ? "" : `≈ ${F.money((st.mixCur.get(st.cur)?.h || 0) / 100, "HUF")}`),
+        (delta == null ? esc(t("cust.noPrev")) : `<span class="${delta >= 0 ? "delta-up" : "delta-down"}">${esc(t("cust.vsPrev", { pct: F.signedPct(delta) }))}</span>`) + others(st.ytd) + hufLine(st.mixCur), true),
       S.hasPayments
         ? kpiTile(t("cust.openInvoices"), bigMoney(st.main(st.open), st.cur),
           esc(st.overdueN ? t("cust.overdueCount", { n: st.openN, o: st.overdueN }) : t("cust.openCount", { n: st.openN })) + others(st.open))
         : kpiTile(t("cust.invoicesYtd", { p: P.short }), esc(F.num(st.ytdCount)),
           esc([st.ytdCredits ? t("cust.creditCount", { n: st.ytdCredits }) : "", t("cust.invoiceCountAll", { n: F.num(st.count) })].filter(Boolean).join(" · "))),
       termsTile,
-      kpiTile(t("cust.revenueTotal"), bigMoney(st.main(st.total), st.cur), esc(yearsSpan) + others(st.total)),
+      kpiTile(t("cust.revenueTotal"), tipWrap(bigMoney(st.main(st.total), st.cur), st.cur === "HUF" ? "" : `≈ ${F.money((st.mixTotal.get(st.cur)?.h || 0) / 100, "HUF")}`),
+        esc(yearsSpan) + others(st.total) + hufLine(st.mixTotal)),
     ];
   } else {
     const empty = (label) => kpiTile(label, `<span class="empty">–</span>`, esc(t("cust.noExport")));
@@ -1463,7 +1515,7 @@ function latestInvoicesHtml(c) {
   return `<div class="table-wrap plain"><table>
     <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(amtWord())}</th><th></th></tr></thead>
     <tbody>${shown.map((i) => `<tr><td class="mono">${esc(i.id)}</td><td>${esc(F.date(i.date))}</td>
-      <td class="num">${esc(F.money(amtOf(i), i.cur))}</td><td>${i.credit ? `<span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}${i.origin && i.origin !== "R" ? ` <span class="pill ok">${esc(i.origin)}</span>` : ""}</td></tr>`).join("")}</tbody>
+      <td class="num">${fxInv(i)}</td><td>${i.credit ? `<span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}${i.origin && i.origin !== "R" ? ` <span class="pill ok">${esc(i.origin)}</span>` : ""}</td></tr>`).join("")}</tbody>
   </table></div>
   <div class="card-foot"><a href="#sales?from=${esc(c.st.firstDate || TODAY)}&to=${TODAY}&cur=${encodeURIComponent(c.st.cur)}&cust=${encodeURIComponent(c.id)}">${esc(t("cust.allSales", { n: F.num(c.invoices.length) }))}</a></div>`;
 }
@@ -1478,14 +1530,22 @@ function granSwitch(active, grans) {
 }
 function drawCustomerPeriods(host, c) { drawInvoicePeriods(host, c.invoices, c.st.cur, { cust: c.id }); }
 /* The last few periods of these invoices in one currency, the current period highlighted. */
-function drawInvoicePeriods(host, invoices, cur, extra = {}) {
+function drawInvoicePeriods(host, invoices, cur, extra = {}, all = false) {
   const g = custGran();
   const first = invoices.reduce((a, i) => (i.cur === cur && i.date && (!a || i.date < a) ? i.date : a), null) || TODAY;
   const keys = periodKeys(first, TODAY, g).slice(-CUST_PERIODS[g]);
   const sums = new Map();
-  for (const i of invoices) if (i.cur === cur && i.date) addTo(sums, periodKey(i.date, g), val(i));
+  const mixes = new Map();
+  for (const i of invoices) {
+    if (!i.date || (!all && i.cur !== cur)) continue;
+    const k = periodKey(i.date, g);
+    addTo(sums, k, all ? hufVal(i) : val(i));
+    mixAdd(mixes.get(k) || mixes.set(k, new Map()).get(k), i);
+  }
+  const extraLines = (k) => { const mix = mixes.get(k) || new Map(); return all ? (mixTip(mix) ? mixLines(mix) : [])
+    : cur !== "HUF" && mix.get(cur) ? [`≈ ${F.money(mix.get(cur).h / 100, "HUF")}`] : []; };
   drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur, mode: "highlight", label: t("cust.revenueBy"),
-    href: (k) => bucketHref(k, g, { cur, ...extra }) });
+    href: (k) => bucketHref(k, g, { cur, ...extra }), tipExtra: (i) => extraLines(keys[i]) });
 }
 /* Wire a year/half/quarter/month switch to a redraw function. */
 function onGranSwitch(root, redraw) {
@@ -1513,7 +1573,7 @@ function openInvoicesHtml(c) {
   return `<div class="table-wrap plain"><table>
     <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(amtWord())}</th><th>${esc(t("col.due"))}</th><th>${esc(t("col.state"))}</th></tr></thead>
     <tbody>${shown.map((i) => `<tr><td class="mono">${esc(i.id)}</td><td>${esc(F.date(i.date))}</td>
-      <td class="num">${esc(F.money(amtOf(i), i.cur))}</td><td>${esc(F.date(i.dueEff))}${i.dueEstimated ? "*" : ""}</td><td>${pill(i)}</td></tr>`).join("")}</tbody>
+      <td class="num">${fxInv(i)}</td><td>${esc(F.date(i.dueEff))}${i.dueEstimated ? "*" : ""}</td><td>${pill(i)}</td></tr>`).join("")}</tbody>
   </table></div>
   ${open.length > shown.length ? `<div class="card-foot">+${open.length - shown.length}</div>` : ""}
   <div class="card-foot">${esc(estimated ? t("cust.openFoot") : t("cust.openFoot").split(" * ")[0])}</div>`;
@@ -1600,7 +1660,7 @@ function bucketHref(key, g, extra = {}, clip = null) {
   q.set("to", to);
   return `#sales?${q}`;
 }
-function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, cur, mode = "highlight", label = "", height = 270, href = null }) {
+function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, cur, mode = "highlight", label = "", height = 270, href = null, tipExtra = null }) {
   const n = keys.length;
   const W = Math.max(300, host.clientWidth), H = height;
   const m = { l: 56, r: 8, t: 24, b: 30 };
@@ -1646,6 +1706,7 @@ function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, 
       tipLines.push(`${t("sales.prevYear")}${prevKeys?.[i] ? ` (${periodLabel(prevKeys[i], g)})` : ""}: ${F.money(prev[i], cur)}`);
       if (prev[i]) tipLines.push(`${t("sales.col.change")}: ${F.signedPct((values[i] - prev[i]) / Math.abs(prev[i]))}`);
     }
+    if (tipExtra) tipLines.push(...tipExtra(i));
     const link = href ? href(k) : null;
     if (link) tipLines.push(t("chart.click"));
     svg += `<rect class="band${link ? " link" : ""}" x="${m.l + bw * i}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(tipLines.join("\n"))}"${link ? ` data-href="${esc(link)}"` : ""}/>`;
@@ -1813,38 +1874,41 @@ function drawSales(host, currencies) {
   const pFrom = range.prevFrom, pTo = range.prevTo;
 
   const keys = periodKeys(range.from, range.to, g);
-  const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
+  const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0, h: 0, hPrev: 0 }]));
   const { prevKeys, toCur } = prevBuckets(keys, pFrom, pTo, g);
   const groups = new Map(), byCur = new Map();
   let total = 0, prevTotal = 0, count = 0, credits = 0, positive = 0;
-  const list = [];
+  let hTotal = 0, hPrevTotal = 0, hPositive = 0;
+  const list = [], hufByCur = new Map();
   for (const i of S.invoices) {
     if (!i.date || !customerOk(i.c)) continue;
     const inRange = i.date >= range.from && i.date <= range.to;
     const inPrev = !!pFrom && i.date >= pFrom && i.date <= pTo;
     if (!inRange && !inPrev) continue;
-    if (inRange) addTo(byCur, i.cur, amount(i));
+    if (inRange) { addTo(byCur, i.cur, amount(i)); addTo(hufByCur, i.cur, hufVal(i)); }
     if (i.cur !== cur) continue;
-    const v = amount(i);
+    const v = amount(i), h = hufVal(i);
     const [gk, glabel, ghref] = breakdownKey(by, i);
-    if (!groups.has(gk)) groups.set(gk, { key: gk, label: glabel, href: ghref, v: 0, prev: 0, n: 0 });
+    if (!groups.has(gk)) groups.set(gk, { key: gk, label: glabel, href: ghref, v: 0, prev: 0, n: 0, h: 0, hPrev: 0 });
     const grp = groups.get(gk);
     if (inRange) {
       const row = per.get(periodKey(i.date, g));
-      if (row) { row.v += v; if (i.credit) row.credits++; else row.n++; }
-      total += v; grp.v += v;
+      if (row) { row.v += v; row.h += h; if (i.credit) row.credits++; else row.n++; }
+      total += v; grp.v += v; hTotal += h; grp.h += h;
       list.push(i);
-      if (i.credit) credits++; else { count++; grp.n++; positive += v; }
+      if (i.credit) credits++; else { count++; grp.n++; positive += v; hPositive += h; }
     }
     if (inPrev) {
       const row = per.get(toCur.get(periodKey(i.date, g)));
-      if (row) row.prev += v;
-      prevTotal += v; grp.prev += v;
+      if (row) { row.prev += v; row.hPrev += h; }
+      prevTotal += v; grp.prev += v; hPrevTotal += h; grp.hPrev += h;
     }
   }
   const periods = [...per.values()];
   const keep = { ...Object.fromEntries(p), cur };   // filters kept when opening one period
-  const big = (c) => { const x = F.compactParts(c / 100, cur); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
+  const huf = (h) => (cur === "HUF" ? "" : `≈ ${F.money(h / 100, "HUF")}`);
+  const money = (c, h) => fx(F.money(c / 100, cur), cur, h);
+  const big = (c, h = null) => { const x = F.compactParts(c / 100, cur); return tipWrap(`${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`, h == null ? "" : huf(h)); };
   const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const change = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
   const rangeText = `${F.date(range.from)} – ${F.date(range.to)}`;
@@ -1854,14 +1918,14 @@ function drawSales(host, currencies) {
     <section class="cur-switch" data-param="cur" role="group" aria-label="${esc(t("sales.ctl.currency"))}">
       <span class="ctl-label">${esc(t("sales.ctl.currency"))}</span>
       ${currencies.map((c) => `<button type="button" data-value="${esc(c)}" aria-pressed="${c === cur}">
-        <b>${esc(c)}</b><span>${byCur.get(c) ? esc(compactMoney(byCur.get(c) / 100, c)) : "–"}</span></button>`).join("")}
+        <b>${esc(c)}</b><span>${byCur.get(c) ? fx(compactMoney(byCur.get(c) / 100, c), c, hufByCur.get(c)) : "–"}</span></button>`).join("")}
       <span class="cur-hint">${esc(t("sales.curHint"))}</span>
     </section>
     <section class="kpis">
-      ${tile(t(amt === "gross" ? "sales.kpi.gross" : "sales.kpi.net"), big(total), esc(rangeText), true)}
-      ${tile(t("sales.kpi.prev"), big(prevTotal), prevTotal ? `${change(total, prevTotal)} · ${esc(prevText)}` : esc(prevText))}
+      ${tile(t(amt === "gross" ? "sales.kpi.gross" : "sales.kpi.net"), big(total, hTotal), esc(rangeText), true)}
+      ${tile(t("sales.kpi.prev"), big(prevTotal, hPrevTotal), prevTotal ? `${change(total, prevTotal)} · ${esc(prevText)}` : esc(prevText))}
       ${tile(t("sales.kpi.count"), esc(F.num(count)), esc(credits ? t("cust.creditCount", { n: F.num(credits) }) : ""))}
-      ${tile(t("sales.kpi.avg"), count ? big(Math.round(positive / count)) : "–", esc(t("sales.kpi.avgSub")))}
+      ${tile(t("sales.kpi.avg"), count ? big(Math.round(positive / count), Math.round(hPositive / count)) : "–", esc(t("sales.kpi.avgSub")))}
     </section>
     <div class="grid-2 sales-pair">
       <section class="card chart">
@@ -1873,8 +1937,8 @@ function drawSales(host, currencies) {
         <div class="card-head"><h2>${esc(t("sales.periods"))}</h2><span class="sub">${esc(`${t("gran." + g)}, ${cur}`)}</span></div>
         <div class="table-wrap plain periods"><table>
           <thead><tr><th>${esc(t("sales.col.period"))}</th><th class="num">${esc(t("sales.col.amount"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th class="num">${esc(t("sales.col.change"))}</th><th class="num">${esc(t("sales.col.count"))}</th></tr></thead>
-          <tbody>${[...periods].reverse().map((r) => `<tr><td><a href="${esc(bucketHref(r.key, g, keep, range))}" title="${esc(t("chart.click"))}">${esc(periodLabel(r.key, g))}</a></td><td class="num">${esc(F.money(r.v / 100, cur))}</td>
-            <td class="num muted">${esc(F.money(r.prev / 100, cur))}</td><td class="num">${change(r.v, r.prev)}</td><td class="num">${esc(F.num(r.n))}${r.credits ? ` <span class="muted">(−${r.credits})</span>` : ""}</td></tr>`).join("")}</tbody>
+          <tbody>${[...periods].reverse().map((r) => `<tr><td><a href="${esc(bucketHref(r.key, g, keep, range))}" title="${esc(t("chart.click"))}">${esc(periodLabel(r.key, g))}</a></td><td class="num">${money(r.v, r.h)}</td>
+            <td class="num muted">${money(r.prev, r.hPrev)}</td><td class="num">${change(r.v, r.prev)}</td><td class="num">${esc(F.num(r.n))}${r.credits ? ` <span class="muted">(−${r.credits})</span>` : ""}</td></tr>`).join("")}</tbody>
         </table></div>
       </section>
     </div>
@@ -1890,16 +1954,17 @@ function drawSales(host, currencies) {
     </section>`;
 
   drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: pFrom ? periods.map((r) => r.prev / 100) : null,
-    prevKeys, cur, mode: "compare", label: t("sales.chart"), height: 240, href: (k) => bucketHref(k, g, keep, range) });
+    prevKeys, cur, mode: "compare", label: t("sales.chart"), height: 240,
+    tipExtra: (i) => (cur === "HUF" ? [] : [`${rangeText}: ≈ ${F.money(periods[i].h / 100, "HUF")}`]), href: (k) => bucketHref(k, g, keep, range) });
   const rows = [...groups.values()].filter((r) => r.v || r.prev);
   drawTable($("#sales-by", host), {
     id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
     columns: [
       { key: "name", label: t("by." + by), value: (r) => r.label, html: (r) => (r.href ? `<a href="${r.href}">${esc(r.label)}</a>` : esc(r.label)), wrap: true },
-      { key: "amount", label: `${t("sales.col.amount")} (${cur})`, num: true, value: (r) => r.v / 100, html: (r) => esc(F.money(r.v / 100, cur)) },
+      { key: "amount", label: `${t("sales.col.amount")} (${cur})`, num: true, value: (r) => r.v / 100, html: (r) => money(r.v, r.h) },
       { key: "share", label: t("sales.col.share"), num: true, value: (r) => (total ? r.v / total : 0), html: (r) => esc(F.pct(total ? r.v / total : 0)) },
       { key: "count", label: t("sales.col.count"), num: true, value: (r) => r.n },
-      { key: "prev", label: t("sales.prevYear"), num: true, value: (r) => r.prev / 100, html: (r) => `<span class="muted">${esc(F.money(r.prev / 100, cur))}</span>` },
+      { key: "prev", label: t("sales.prevYear"), num: true, value: (r) => r.prev / 100, html: (r) => `<span class="muted">${money(r.prev, r.hPrev)}</span>` },
       { key: "change", label: t("sales.col.change"), num: true, value: (r) => (r.prev ? (r.v - r.prev) / Math.abs(r.prev) : null), html: (r) => change(r.v, r.prev) },
     ],
   });
@@ -1907,7 +1972,7 @@ function drawSales(host, currencies) {
     { key: "date", label: t("col.invDate"), value: (i) => i.date, html: (i) => esc(F.date(i.date)) },
     { key: "id", label: t("col.invNumber"), value: (i) => i.id, html: (i) => `<span class="mono">${esc(i.id)}</span>` },
     { key: "customer", label: t("off.customer"), value: (i) => i.c.name || i.c.id, html: (i) => custLink(i.c), wrap: true },
-    { key: "amount", label: `${amtWord()} (${cur})`, num: true, value: (i) => amtOf(i), html: (i) => esc(F.money(amtOf(i), i.cur)) },
+    { key: "amount", label: `${amtWord()} (${cur})`, num: true, value: (i) => amtOf(i), html: (i) => fxInv(i) },
     { key: "type", label: t("sales.col.type"), value: (i) => `${i.origin || ""}${i.credit ? " " + t("cust.credit") : ""}`,
       html: (i) => `${i.origin ? `<span class="pill ok">${esc(i.origin)}</span>` : ""}${i.credit ? ` <span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}` },
     { key: "manager", label: t("col.manager"), value: (i) => pmName(pmKey(i.c)), html: (i) => pmLink(pmKey(i.c)) },
