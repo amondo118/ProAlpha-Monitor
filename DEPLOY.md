@@ -166,6 +166,37 @@ sudo ufw status
 
 Az oldal ezután: `http://<szerver-neve-vagy-IP>:8080/` (80-as portnál a `:8080` elhagyható).
 
+## 5b. Ha a 80-as porton már fut Apache
+
+Az oldal a meglévő Apache-on keresztül is elérhető egy alcímen
+(`http://<szerver>/proalpha/`); a dashboard saját portja (`WEB_PORT`) ilyenkor
+kívülről nem is kell. A proxy modulok bekapcsolása:
+
+```bash
+sudo a2enmod proxy proxy_http
+```
+
+Az `/etc/apache2/sites-enabled/000-default.conf` fájlban a `<VirtualHost *:80>` blokkon
+belülre (a `WEB_PORT` értékével):
+
+```
+ProxyPass        /proalpha/ http://127.0.0.1:8080/
+ProxyPassReverse /proalpha/ http://127.0.0.1:8080/
+```
+
+Ellenőrzés és újratöltés:
+
+```bash
+sudo apache2ctl configtest
+```
+
+```bash
+sudo systemctl reload apache2
+```
+
+Ha az Apache-ra semmi más nem épül, le is állítható (`sudo systemctl disable --now apache2`),
+és akkor `WEB_PORT=80` közvetlenül használható.
+
 ## 6. Frissítés új verzióra
 
 ```bash
