@@ -202,12 +202,11 @@ def write_invoices(path, customers, columns, seed=12):
 
     def emit(bf, d, cid, cur, net, gross, clerk, kind="Számla"):
         number[bf] += r.randint(1, 3) if bf == "R" else 1
-        rate = 1 if cur == "HUF" else round(RATE[cur] * r.uniform(0.92, 1.04), 2)
         values = {
             "doc_id": f"PA1106:z:{r.getrandbits(128):032x}", "id": str(number[bf]), "customer_id": cid,
             "date": d.strftime("%Y.%m.%d"), "tax_date": d.strftime("%Y.%m.%d"),
             "net": hu_amount(net), "gross": hu_amount(gross), "currency": iso_to_pn[cur],
-            "kind": kind, "cancelled": "Nem", "origin": bf, "clerk": clerk, "rate": hu_amount(rate),
+            "kind": kind, "cancelled": "Nem", "origin": bf, "clerk": clerk,
         }
         row = [""] * len(header)
         for field, i in slot.items():

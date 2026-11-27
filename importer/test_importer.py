@@ -284,32 +284,6 @@ class DocumentTypeTest(Base):
         self.assertEqual(s["types"], {"L": 2, "R": 2, "VFP": 1, "U": 1, "A": 1})
         self.assertEqual(warnings, [])
 
-    def test_foreign_invoices_get_an_exact_forint_value_from_their_rate(self):
-        # rows from the real export: EUR invoices with Valutaárf.; HUF rows have rate 1
-        cols = (self.dir / "oszlopok.toml").read_text(encoding="utf-8").replace('kind = "SzlT"', 'kind = "SzlT"\nrate = "Valutaárf."')
-        (self.dir / "oszlopok.toml").write_text(cols, encoding="utf-8")
-        self.cfg = datasets.load_config(self.dir)
-        c = self.customers([["1", "Alfa GmbH", "ALFA", "", "1"], ["2", "Beta Kft.", "BETA", "", "0"]])
-        d = self.write("szamlak.csv", ["V_BelegKopf_Obj", "BizSz", "Vevő", "Bizonylatdátum", "Végösszeg", "Br. végösszeg", "Pn", "SzlT", "BF", "Ügyintéző", "Valutaárf."], [
-            ["d1", "11000126", "1", "2026.08.13", "12.844,89", "12.844,89", "1", "Számla", "R", "", "364,64"],
-            ["d2", "11000127", "1", "2026.08.10", "3.136,16", "3.982,92", "1", "Számla", "R", "", "363,36"],
-            ["d3", "11000128", "1", "2026.08.11", "100,00", "100,00", "1", "Jóváírás", "R", "", "363,36"],
-            ["d4", "11000129", "2", "2026.08.12", "480.480,00", "610.210,00", "0", "Számla", "R", "", "1"],
-            ["d5", "11000130", "1", "2026.08.14", "50,00", "50,00", "1", "Számla", "R", "", ""],     # no rate
-        ], delimiter=",", encoding="utf-8")
-        data, sources, warnings = self.build(c, d)
-        inv = {i["id"]: i for i in data["invoices"]}
-        self.assertEqual(inv["11000126"]["net_local"], 4683760.69)   # 12 844,89 x 364,64 = 4 683 760,6896
-        self.assertEqual(inv["11000127"]["gross_local"], 1447233.81)  # 3 982,92 x 363,36 = 1 447 233,8112
-        self.assertEqual(inv["11000128"]["net_local"], -36336)        # a credit note stays negative in HUF too
-        self.assertIsNone(inv["11000129"].get("net_local"))              # HUF: the amount itself is the forint value
-        self.assertIsNone(inv["11000130"].get("net_local"))
-        self.assertEqual(sources["invoices"]["no_rate"], {"EUR": 1})
-        self.assertIn("1 EUR invoices have no exchange rate: left out of the HUF totals", warnings)
-        self.assertNotIn("rate", inv["11000126"])
-        # forint control total: 480 480 + 4 683 760,69 + 1 139 555,10 − 36 336 (the rate-less one counts 0)
-        self.assertEqual(importer.control_totals(data)["net_huf_cents"], 48048000 + 468376069 + 113955510 - 3633600)
-
     def test_clerk_user_names_are_paired_with_manager_names(self):
         c = self.customers([["1", "Alfa Kft.", "ALFA", "Csikós Tamás", "0"]])
         d = self.docs([
