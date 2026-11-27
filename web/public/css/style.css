@@ -119,6 +119,12 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .period-pick select { border: 0; background: transparent; padding: 8px 6px; font-weight: 600; color: var(--text); width: 190px; text-overflow: ellipsis; cursor: pointer; }
 .period-pick select:focus-visible { outline: none; }
 .period-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.amt-pick { flex: none; }
+.seg.amt-pick button { padding: 7px 12px; font-size: 13px; font-weight: 600; }
+/* clickable chart bars: the whole column band opens the invoices behind it */
+svg .band.link { cursor: pointer; }
+svg .band.link:hover { fill: var(--accent); fill-opacity: .07; }
+.periods a, .periods td a { font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 12px; color: var(--text-2); font-size: 13px; margin-left: auto; flex-wrap: wrap; }
 .tag { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   background: var(--tag-bg); color: var(--tag-text); padding: 3px 8px; border-radius: 6px; }
@@ -376,3 +382,7 @@ kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--bo
 /* compact summary tiles (Ügyintézők tab) */
 .kpis-compact .kpi { padding: 12px 16px; }
 .kpis-compact .kpi .value { font-size: 24px; }
+button.small { padding: 4px 10px; font-size: 12px; }
+#sales-inv-card .card-head .sub { margin-right: auto; }
+.cust-chip { display: inline-flex; align-items: center; gap: 6px; }
+.cust-chip .link-btn { padding: 0 2px; }

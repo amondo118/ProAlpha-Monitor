@@ -196,7 +196,7 @@ def build(files, cfg):
             if r.get("clerk"):  # user name on the document -> Ügyintéző name, if paired
                 r["clerk"] = clerks.get(r["clerk"].strip().casefold(), r["clerk"].strip())
             if has_type and bf in offer_types:
-                offers.append({f: r.get(f) for f in ("id", "customer_id", "date", "net", "currency", "currency_code", "clerk")})
+                offers.append({f: r.get(f) for f in ("id", "customer_id", "date", "net", "gross", "currency", "currency_code", "clerk")})
                 continue
             kind = r.get("kind") or ""
             kinds[kind] = kinds.get(kind, 0) + 1

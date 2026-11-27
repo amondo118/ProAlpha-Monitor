@@ -50,6 +50,12 @@ const saveJson = (key, value) => { try { localStorage.setItem(key, JSON.stringif
 const SETTINGS_DEFAULT = { newDays: 30, amount: "net" };
 let SETTINGS = { ...SETTINGS_DEFAULT, ...loadJson("settings", {}) };
 let CUSTOM_PERIODS = loadJson("customPeriods", []);   // [{id, name, from, to}]
+/* Net or gross: one switch in the top bar for every view. The control totals on
+   the status page stay net (they check the import, not the view). */
+const isGross = () => SETTINGS.amount === "gross";
+const amtOf = (i) => (isGross() ? (i.gross ?? i.net) : i.net);
+const val = (i) => cents(amtOf(i));
+const amtWord = () => t(isGross() ? "sales.gross" : "sales.net");
 
 // "New customer" window (days), from the settings
 const PERIOD = {};
@@ -324,7 +330,7 @@ function customerStats(c) {
     openN: 0, overdueN: 0, firstYear: null, lastYear: null, ytdCount: 0, ytdCredits: 0, prevCount: 0, count: 0, firstDate: null };
   const counts = new Map();
   for (const i of c.invoices) {
-    const v = cents(i.net);
+    const v = val(i);
     counts.set(i.cur, (counts.get(i.cur) || 0) + 1);
     addTo(st.total, i.cur, v);
     st.count++;
@@ -626,12 +632,12 @@ function layoutColumns(id, columns) {
    to resize (double-click the edge: automatic widths again). */
 let dragKey = null, suppressSortClick = false;
 function drawTable(host, opts) {
-  const { rows, defaultSort, total = rows.length, totals = "", id = current.view, pageSize = CONFIG.pageSize } = opts;
+  const { rows, defaultSort, total = rows.length, totals = "", id = current.view, pageSize = CONFIG.pageSize, sortParam = "sort" } = opts;
   const layout = loadLayout(id);
   const columns = layoutColumns(id, opts.columns);
   const widths = layout.widths || {};
   const fixed = Object.keys(widths).length > 0;
-  const sp = current.params.get("sort") || defaultSort;
+  const sp = current.params.get(sortParam) || defaultSort;
   const desc = sp.startsWith("-");
   const col = columns.find((c) => c.key === sp.replace(/^-/, "")) || columns[0];
   const sorted = [...rows].sort((a, b) => {
@@ -670,7 +676,7 @@ function drawTable(host, opts) {
     const th = e.target.closest("th[data-key]");
     if (th) {
       const k = th.dataset.key;
-      setParams({ sort: sp.replace(/^-/, "") === k && !desc ? "-" + k : k });
+      setParams({ [sortParam]: sp.replace(/^-/, "") === k && !desc ? "-" + k : k });
       tablePage[id] = 0;
       redraw();
       return;
@@ -888,11 +894,11 @@ function renderOverview(main) {
     if (!i.date) continue;
     if (inCur(i.date)) {
       active.add(i.c);
-      addTo(byCurrency, i.cur, cents(i.net));
+      addTo(byCurrency, i.cur, val(i));
       if (!i.credit) curCount.set(i.cur, (curCount.get(i.cur) || 0) + 1);
     } else if (inPrev(i.date)) activePrev.add(i.c);
     if (i.cur !== "HUF") continue;
-    const v = cents(i.net), k = periodKey(i.date, g), km = periodKey(i.date, "month");
+    const v = val(i), k = periodKey(i.date, g), km = periodKey(i.date, "month");
     if (inCur(i.date)) {
       ytd += v;
       addTo(byIndustry, i.c.industryLabel || "", v);
@@ -951,7 +957,7 @@ function renderOverview(main) {
       ${latestCard}
     </div>`;
   drawPeriodChart($("#ov-monthly"), { keys, g, values: keys.map((k) => per.get(k).v / 100), prev: P.prevFrom ? keys.map((k) => per.get(k).prev / 100) : null,
-    cur: "HUF", mode: "compare", label: t("ov.monthly"), shift: P.shift });
+    cur: "HUF", mode: "compare", label: t("ov.monthly"), shift: P.shift, href: (k) => bucketHref(k, g, { cur: "HUF" }, P) });
   drawMonthly($("#monthly"), all);
 }
 
@@ -984,7 +990,9 @@ function drawMonthly(host, rows) {
     const cx = m.l + bw * k + bw / 2;
     svg += barPath(cx - barW / 2, barW, y(vals[k]), base, "bar-out");
     if (k % labelEvery === 0) svg += `<text class="axis-label" x="${cx}" y="${H - 6}" text-anchor="middle">${esc(F.month(mo))}</text>`;
-    svg += `<rect class="band" x="${m.l + bw * k}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(`${F.monthYear(mo)}\n${t("chart.newN", { n: vals[k] })}`)}"/>`;
+    const link = `#customers?from=${mo}-01&to=${addDays(nextPeriodStart(mo, "month"), -1)}`;
+    svg += `<rect class="band link" x="${m.l + bw * k}" y="${m.t}" width="${bw}" height="${ph}" data-href="${esc(link)}"
+      data-tip="${esc(`${F.monthYear(mo)}\n${t("chart.newN", { n: vals[k] })}\n${t("chart.clickNew")}`)}"/>`;
   });
   host.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t("chart.newMonthly"))}">${svg}</svg>`;
 }
@@ -1067,7 +1075,7 @@ function offersCard(m) {
     ${list.length ? `<div class="table-wrap plain" style="max-height:360px;overflow:auto"><table>
       <thead><tr><th>${esc(t("col.invDate"))}</th><th>${esc(t("off.number"))}</th><th>${esc(t("off.customer"))}</th><th class="num">${esc(t("off.amount"))}</th></tr></thead>
       <tbody>${shown.map((o) => `<tr><td>${esc(F.date(o.date))}</td><td class="mono">${esc(o.id)}</td><td class="wrap">${custLink(o.c)}</td>
-        <td class="num muted">${o.net ? esc(F.money(o.net, o.cur)) : "–"}</td></tr>`).join("")}</tbody></table></div>
+        <td class="num muted">${amtOf(o) ? esc(F.money(amtOf(o), o.cur)) : "–"}</td></tr>`).join("")}</tbody></table></div>
       ${list.length > shown.length ? `<div class="card-foot">+${esc(F.num(list.length - shown.length))}</div>` : ""}`
       : `<div class="empty-state">${esc(t("off.none"))}</div>`}
     <div class="card-foot">${esc(t("off.note"))}</div>
@@ -1096,9 +1104,9 @@ function renderManager(main) {
   for (const i of m.invoices) {
     if (i.cur !== "HUF" || !i.date) continue;
     const k = periodKey(i.date, "month");
-    if (k === lmKey) lm += cents(i.net);
-    if (k === lmPrevKey) lmPrev += cents(i.net);
-    if (inCur(i.date)) addTo(byIndustry, i.c.industryLabel || "", cents(i.net));
+    if (k === lmKey) lm += val(i);
+    if (k === lmPrevKey) lmPrev += val(i);
+    if (inCur(i.date)) addTo(byIndustry, i.c.industryLabel || "", val(i));
   }
   const top = [...m.customers].sort((a, b) => (b.st.ytd.get("HUF") || 0) - (a.st.ytd.get("HUF") || 0))[0];
   const topIndustry = [...byIndustry.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1158,8 +1166,8 @@ function renderManager(main) {
     </div>`;
 
   if (S.hasInvoices) {
-    drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF");
-    onGranSwitch(main, () => drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF"));
+    drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key });
+    onGranSwitch(main, () => drawInvoicePeriods($("#mgr-chart"), m.invoices, "HUF", { pm: key }));
   }
   const money = (c, map) => F.money(c.st.main(map) || null, c.st.cur) + (c.st.others(map).size ? " +" : "");
   const cols = [
@@ -1370,11 +1378,11 @@ function latestInvoicesHtml(c) {
   if (!c.invoices.length) return `<div class="empty-state">${esc(t("cust.noInvoices"))}</div>`;
   const shown = c.invoices.slice(0, 15);
   return `<div class="table-wrap plain"><table>
-    <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(t("col.net"))}</th><th></th></tr></thead>
+    <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(amtWord())}</th><th></th></tr></thead>
     <tbody>${shown.map((i) => `<tr><td class="mono">${esc(i.id)}</td><td>${esc(F.date(i.date))}</td>
-      <td class="num">${esc(F.money(i.net, i.cur))}</td><td>${i.credit ? `<span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}${i.origin && i.origin !== "R" ? ` <span class="pill ok">${esc(i.origin)}</span>` : ""}</td></tr>`).join("")}</tbody>
+      <td class="num">${esc(F.money(amtOf(i), i.cur))}</td><td>${i.credit ? `<span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}${i.origin && i.origin !== "R" ? ` <span class="pill ok">${esc(i.origin)}</span>` : ""}</td></tr>`).join("")}</tbody>
   </table></div>
-  <div class="card-foot"><a href="#sales?r=all&g=month&q=${encodeURIComponent(c.id)}">${esc(t("cust.allSales", { n: F.num(c.invoices.length) }))}</a></div>`;
+  <div class="card-foot"><a href="#sales?from=${esc(c.st.firstDate || TODAY)}&to=${TODAY}&cur=${encodeURIComponent(c.st.cur)}&cust=${encodeURIComponent(c.id)}">${esc(t("cust.allSales", { n: F.num(c.invoices.length) }))}</a></div>`;
 }
 
 /* Customer sales chart: the last few periods, the current one highlighted. */
@@ -1385,15 +1393,16 @@ function granSwitch(active, grans) {
   return `<div class="seg" role="group" aria-label="${esc(t("sales.gran"))}">${grans.map((g) =>
     `<button type="button" data-gran="${g}" aria-pressed="${g === active}">${esc(t("gran." + g))}</button>`).join("")}</div>`;
 }
-function drawCustomerPeriods(host, c) { drawInvoicePeriods(host, c.invoices, c.st.cur); }
+function drawCustomerPeriods(host, c) { drawInvoicePeriods(host, c.invoices, c.st.cur, { cust: c.id }); }
 /* The last few periods of these invoices in one currency, the current period highlighted. */
-function drawInvoicePeriods(host, invoices, cur) {
+function drawInvoicePeriods(host, invoices, cur, extra = {}) {
   const g = custGran();
   const first = invoices.reduce((a, i) => (i.cur === cur && i.date && (!a || i.date < a) ? i.date : a), null) || TODAY;
   const keys = periodKeys(first, TODAY, g).slice(-CUST_PERIODS[g]);
   const sums = new Map();
-  for (const i of invoices) if (i.cur === cur && i.date) addTo(sums, periodKey(i.date, g), cents(i.net));
-  drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur, mode: "highlight", label: t("cust.revenueBy") });
+  for (const i of invoices) if (i.cur === cur && i.date) addTo(sums, periodKey(i.date, g), val(i));
+  drawPeriodChart(host, { keys, g, values: keys.map((k) => (sums.get(k) || 0) / 100), cur, mode: "highlight", label: t("cust.revenueBy"),
+    href: (k) => bucketHref(k, g, { cur, ...extra }) });
 }
 /* Wire a year/half/quarter/month switch to a redraw function. */
 function onGranSwitch(root, redraw) {
@@ -1419,9 +1428,9 @@ function openInvoicesHtml(c) {
   const shown = open.slice(0, CONFIG.openInvoicesShown);
   const estimated = shown.some((i) => i.dueEstimated);
   return `<div class="table-wrap plain"><table>
-    <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(t("col.net"))}</th><th>${esc(t("col.due"))}</th><th>${esc(t("col.state"))}</th></tr></thead>
+    <thead><tr><th>${esc(t("col.invNumber"))}</th><th>${esc(t("col.invDate"))}</th><th class="num">${esc(amtWord())}</th><th>${esc(t("col.due"))}</th><th>${esc(t("col.state"))}</th></tr></thead>
     <tbody>${shown.map((i) => `<tr><td class="mono">${esc(i.id)}</td><td>${esc(F.date(i.date))}</td>
-      <td class="num">${esc(F.money(i.net, i.cur))}</td><td>${esc(F.date(i.dueEff))}${i.dueEstimated ? "*" : ""}</td><td>${pill(i)}</td></tr>`).join("")}</tbody>
+      <td class="num">${esc(F.money(amtOf(i), i.cur))}</td><td>${esc(F.date(i.dueEff))}${i.dueEstimated ? "*" : ""}</td><td>${pill(i)}</td></tr>`).join("")}</tbody>
   </table></div>
   ${open.length > shown.length ? `<div class="card-foot">+${open.length - shown.length}</div>` : ""}
   <div class="card-foot">${esc(estimated ? t("cust.openFoot") : t("cust.openFoot").split(" * ")[0])}</div>`;
@@ -1485,7 +1494,19 @@ function periodLabel(key, g, short = false) {
 /* Bar chart over periods.
    mode "highlight": one series, the last (current) period in the accent colour;
    mode "compare":   previous year (muted) next to this period (accent). */
-function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270, shift = 1 }) {
+/* Link to the invoices behind one chart period: the Sales tab on that date range
+   (cut to `clip`, never past today), with its own finer breakdown and the filters in `extra`. */
+function bucketHref(key, g, extra = {}, clip = null) {
+  let from = periodStart(key, g), to = addDays(nextPeriodStart(key, g), -1);
+  if (clip) { if (from < clip.from) from = clip.from; if (to > clip.to) to = clip.to; }
+  if (to > TODAY) to = TODAY;
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(extra)) if (v && !["from", "to", "g", "isort"].includes(k)) q.set(k, v);
+  q.set("from", from);
+  q.set("to", to);
+  return `#sales?${q}`;
+}
+function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "highlight", label = "", height = 270, shift = 1, href = null }) {
   const n = keys.length;
   const W = Math.max(300, host.clientWidth), H = height;
   const m = { l: 56, r: 8, t: 24, b: 30 };
@@ -1526,7 +1547,9 @@ function drawPeriodChart(host, { keys, g, values, prev = null, cur, mode = "high
       tipLines.push(`${t("sales.prevYear")} (${periodLabel(shiftKeyYear(k, -shift), g)}): ${F.money(prev[i], cur)}`);
       if (prev[i]) tipLines.push(`${t("sales.col.change")}: ${F.signedPct((values[i] - prev[i]) / Math.abs(prev[i]))}`);
     }
-    svg += `<rect class="band" x="${m.l + bw * i}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(tipLines.join("\n"))}"/>`;
+    const link = href ? href(k) : null;
+    if (link) tipLines.push(t("chart.click"));
+    svg += `<rect class="band${link ? " link" : ""}" x="${m.l + bw * i}" y="${m.t}" width="${bw}" height="${ph}" data-tip="${esc(tipLines.join("\n"))}"${link ? ` data-href="${esc(link)}"` : ""}/>`;
   });
   host.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">${svg}</svg>`;
 }
@@ -1595,12 +1618,12 @@ function renderSales(main) {
       <div class="ctl-row">
         <span class="range-info">${rangeChip(range0)}</span>
         <span class="ctl-dates">${fDate("from", "f.fromDate")}${fDate("to", "f.toDate")}</span>
+        ${p.get("cust") ? `<span class="chip cust-chip"><b>${esc(t("sales.custFilter"))}</b>${esc(S.byId.get(p.get("cust"))?.name || p.get("cust"))}
+          <button type="button" class="link-btn" data-act="clear-cust" aria-label="${esc(t("f.reset"))}">✕</button></span>` : ""}
       </div>
       <div class="ctl-row">
         <span class="ctl-label">${esc(t("sales.gran"))}</span>
         ${pills("g", GRANS.map((g) => [g, t("gran." + g)]), p.get("g") || autoGran(range0.from, range0.to))}
-        <span class="ctl-label">${esc(t("sales.ctl.amount"))}</span>
-        ${pills("amt", [["net", t("sales.net")], ["gross", t("sales.gross")]], p.get("amt") || SETTINGS.amount)}
       </div>
       <div class="filters">
         ${fSearch("q", "f.searchCustomers")}
@@ -1631,7 +1654,7 @@ function renderSales(main) {
     $(".range-info", controls).innerHTML = rangeChip(state.range);
     controls.querySelectorAll('.seg[data-param="g"] button').forEach((b) => b.setAttribute("aria-pressed", b.dataset.value === state.g));
   };
-  const set = (updates) => { setParams(updates); tablePage["sales-by"] = 0; draw(); };
+  const set = (updates) => { setParams(updates); tablePage["sales-by"] = 0; tablePage["sales-invoices"] = 0; draw(); };
 
   // buttons: range, breakdown, amount, currency, "by"
   view.addEventListener("click", (e) => {
@@ -1643,7 +1666,12 @@ function renderSales(main) {
       return;
     }
     const act = e.target.closest("[data-act]")?.dataset.act;
-    if (act === "clear-dates") {
+    if (act === "clear-cust") {
+      e.target.closest(".cust-chip")?.remove();
+      set({ cust: "" });
+    } else if (act === "export-inv") {
+      exportCsv(`szamlak_${state.range.from}_${state.range.to}_${state.cur}`, layoutColumns("sales-invoices", state.invColumns), state.invRows);
+    } else if (act === "clear-dates") {
       controls.querySelectorAll('input[data-param="from"], input[data-param="to"]').forEach((i) => { i.value = ""; });
       set({ from: "", to: "", g: "" });
     } else if (act === "reset") {
@@ -1676,11 +1704,11 @@ function drawSales(host, currencies) {
   const range = salesRange(p);
   const g = GRANS.includes(p.get("g")) ? p.get("g") : autoGran(range.from, range.to);
   const cur = currencies.includes(p.get("cur")) ? p.get("cur") : (currencies.includes("HUF") ? "HUF" : currencies[0]);
-  const amt = (p.get("amt") || SETTINGS.amount) === "gross" ? "gross" : "net";
+  const amt = isGross() ? "gross" : "net";
   const by = BREAKDOWNS.includes(p.get("by")) ? p.get("by") : "customer";
-  const amount = (i) => cents(amt === "gross" ? (i.gross ?? i.net) : i.net);
+  const amount = val;
   const words = (p.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
-  const customerOk = (c) =>
+  const customerOk = (c) => (!p.get("cust") || c.id === p.get("cust")) &&
     (!p.get("pm") || pmKey(c) === p.get("pm")) && (!p.get("region") || c.regionLabel === p.get("region")) &&
     (!p.get("industry") || c.industryLabel === p.get("industry")) && (!p.get("country") || c.country === p.get("country")) &&
     words.every((w) => c._s.includes(w));
@@ -1690,6 +1718,7 @@ function drawSales(host, currencies) {
   const per = new Map(keys.map((k) => [k, { key: k, v: 0, prev: 0, n: 0, credits: 0 }]));
   const groups = new Map(), byCur = new Map();
   let total = 0, prevTotal = 0, count = 0, credits = 0, positive = 0;
+  const list = [];
   for (const i of S.invoices) {
     if (!i.date || !customerOk(i.c)) continue;
     const inRange = i.date >= range.from && i.date <= range.to;
@@ -1705,6 +1734,7 @@ function drawSales(host, currencies) {
       const row = per.get(periodKey(i.date, g));
       if (row) { row.v += v; if (i.credit) row.credits++; else row.n++; }
       total += v; grp.v += v;
+      list.push(i);
       if (i.credit) credits++; else { count++; grp.n++; positive += v; }
     }
     if (inPrev) {
@@ -1714,6 +1744,7 @@ function drawSales(host, currencies) {
     }
   }
   const periods = [...per.values()];
+  const keep = { ...Object.fromEntries(p), cur };   // filters kept when opening one period
   const big = (c) => { const x = F.compactParts(c / 100, cur); return `${esc(x.num)}<span class="unit">${esc(x.unit)}</span>`; };
   const tile = (label, value, sub, hl) => `<div class="kpi${hl ? " hl" : ""}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   const change = (a, b) => (b ? `<span class="${a >= b ? "delta-up" : "delta-down"}">${esc(F.signedPct((a - b) / Math.abs(b)))}</span>` : "–");
@@ -1743,7 +1774,7 @@ function drawSales(host, currencies) {
         <div class="card-head"><h2>${esc(t("sales.periods"))}</h2><span class="sub">${esc(`${t("gran." + g)}, ${cur}`)}</span></div>
         <div class="table-wrap plain periods"><table>
           <thead><tr><th>${esc(t("sales.col.period"))}</th><th class="num">${esc(t("sales.col.amount"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th class="num">${esc(t("sales.col.change"))}</th><th class="num">${esc(t("sales.col.count"))}</th></tr></thead>
-          <tbody>${[...periods].reverse().map((r) => `<tr><td>${esc(periodLabel(r.key, g))}</td><td class="num">${esc(F.money(r.v / 100, cur))}</td>
+          <tbody>${[...periods].reverse().map((r) => `<tr><td><a href="${esc(bucketHref(r.key, g, keep, range))}" title="${esc(t("chart.click"))}">${esc(periodLabel(r.key, g))}</a></td><td class="num">${esc(F.money(r.v / 100, cur))}</td>
             <td class="num muted">${esc(F.money(r.prev / 100, cur))}</td><td class="num">${change(r.v, r.prev)}</td><td class="num">${esc(F.num(r.n))}${r.credits ? ` <span class="muted">(−${r.credits})</span>` : ""}</td></tr>`).join("")}</tbody>
         </table></div>
       </section>
@@ -1751,10 +1782,16 @@ function drawSales(host, currencies) {
     <section class="card">
       <div class="card-head"><h2>${esc(t("sales.breakdown"))}</h2>${pills("by", BREAKDOWNS.map((b) => [b, t("byShort." + b)]), by)}</div>
       <div id="sales-by"></div>
+    </section>
+    <section class="card" id="sales-inv-card">
+      <div class="card-head"><h2>${esc(t("sales.invoices"))}</h2>
+        <span class="sub">${esc(`${rangeText} · ${cur}, ${amtWord().toLowerCase()}`)}</span>
+        <button type="button" class="secondary small" data-act="export-inv">${esc(t("f.export"))}</button></div>
+      <div id="sales-inv"></div>
     </section>`;
 
   drawPeriodChart($("#sales-chart", host), { keys, g, values: periods.map((r) => r.v / 100), prev: pFrom ? periods.map((r) => r.prev / 100) : null,
-    cur, mode: "compare", label: t("sales.chart"), height: 240, shift });
+    cur, mode: "compare", label: t("sales.chart"), height: 240, shift, href: (k) => bucketHref(k, g, keep, range) });
   const rows = [...groups.values()].filter((r) => r.v || r.prev);
   drawTable($("#sales-by", host), {
     id: "sales-by", defaultSort: "-amount", rows, total: rows.length,
@@ -1767,7 +1804,19 @@ function drawSales(host, currencies) {
       { key: "change", label: t("sales.col.change"), num: true, value: (r) => (r.prev ? (r.v - r.prev) / Math.abs(r.prev) : null), html: (r) => change(r.v, r.prev) },
     ],
   });
-  return { g, cur, periods, range };
+  const invColumns = [
+    { key: "date", label: t("col.invDate"), value: (i) => i.date, html: (i) => esc(F.date(i.date)) },
+    { key: "id", label: t("col.invNumber"), value: (i) => i.id, html: (i) => `<span class="mono">${esc(i.id)}</span>` },
+    { key: "customer", label: t("off.customer"), value: (i) => i.c.name || i.c.id, html: (i) => custLink(i.c), wrap: true },
+    { key: "amount", label: `${amtWord()} (${cur})`, num: true, value: (i) => amtOf(i), html: (i) => esc(F.money(amtOf(i), i.cur)) },
+    { key: "type", label: t("sales.col.type"), value: (i) => `${i.origin || ""}${i.credit ? " " + t("cust.credit") : ""}`,
+      html: (i) => `${i.origin ? `<span class="pill ok">${esc(i.origin)}</span>` : ""}${i.credit ? ` <span class="pill warn">${esc(t("cust.credit"))}</span>` : ""}` },
+    { key: "manager", label: t("col.manager"), value: (i) => pmName(pmKey(i.c)), html: (i) => pmLink(pmKey(i.c)) },
+    { key: "clerk", label: t("byShort.clerk"), value: (i) => i.clerk || "" },
+  ];
+  const invRows = drawTable($("#sales-inv", host), { id: "sales-invoices", sortParam: "isort", defaultSort: "-date", rows: list, pageSize: 25,
+    columns: invColumns, totals: esc(`${t("sales.invTotal")}: ${F.money(total / 100, cur)}`) });
+  return { g, cur, periods, range, invColumns, invRows };
 }
 
 /* ---------- import status page ---------- */
@@ -1871,7 +1920,6 @@ function renderSettings(main) {
       <section class="card">
         <div class="card-head"><h2>${esc(t("set.defaults"))}</h2></div>
         ${row(t("set.period"), `<span class="muted">${esc(periodOptionLabel(P.key))}</span>`, t("set.periodHint"))}
-        ${row(t("set.amount"), pills("amount", [["net", t("sales.net")], ["gross", t("sales.gross")]], SETTINGS.amount), t("set.amountHint"))}
         ${row(t("set.newDays"), `<input type="number" id="new-days" min="1" max="365" value="${esc(CONFIG.newDays)}"> <span class="muted">${esc(t("set.days"))}</span>`, t("set.newDaysHint"))}
         ${row(t("theme"), `<select id="theme"><option value="auto">${esc(t("theme.auto"))}</option><option value="light">${esc(t("theme.light"))}</option>
           <option value="dark">${esc(t("theme.dark"))}</option></select>`)}
@@ -1908,14 +1956,6 @@ function renderSettings(main) {
       CUSTOM_PERIODS = CUSTOM_PERIODS.filter((c) => c.id !== del.dataset.del);
       saveJson("customPeriods", CUSTOM_PERIODS);
       applyPeriod(P.key === `c:${del.dataset.del}` ? "ytd" : P.key);
-      return;
-    }
-    const amount = e.target.closest('.seg[data-param="amount"] button');
-    if (amount) {
-      SETTINGS.amount = amount.dataset.value;
-      saveJson("settings", SETTINGS);
-      amount.parentElement.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b === amount));
-      msg("#set-msg", t("set.saved"));
       return;
     }
     const act = e.target.closest("[data-act]")?.dataset.act;
@@ -2046,6 +2086,10 @@ function searchCustomers(q, limit = 8) {
 /* ---------- global events ---------- */
 
 window.addEventListener("hashchange", route);
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-href]");
+  if (el) { tip.hidden = true; location.hash = el.dataset.href; }
+});
 
 /* Period picker (top bar): the default period everywhere; remembered per browser. */
 function renderPeriodSelect() {
@@ -2055,9 +2099,28 @@ function renderPeriodSelect() {
     (sharedPeriods().length ? `<optgroup label="${esc(t("per.shared"))}">${sharedPeriods().map((c) => opt(`s:${c.id}`)).join("")}</optgroup>` : "") +
     (CUSTOM_PERIODS.length ? `<optgroup label="${esc(t("per.custom"))}">${CUSTOM_PERIODS.map((c) => opt(`c:${c.id}`)).join("")}</optgroup>` : "") +
     `<option value="__manage">${esc(t("per.manage"))}</option>`;
+  renderAmtSwitch();
   sel.closest("label").title = `${t("per.title")}: ${F.date(P.from)} – ${F.date(P.to)}` +
     (P.prevFrom ? `\n${t("per.compare")}: ${F.date(P.prevFrom)} – ${F.date(P.prevTo)}` : "");
 }
+/* Net / gross switch (top bar), remembered per browser like the period. */
+function renderAmtSwitch() {
+  const box = $("#amt");
+  box.setAttribute("aria-label", t("amt.title"));
+  box.title = t("amt.hint");
+  box.innerHTML = [["net", t("sales.net")], ["gross", t("sales.gross")]].map(([v, l]) =>
+    `<button type="button" data-value="${v}" aria-pressed="${(v === "gross") === isGross()}">${esc(l)}</button>`).join("");
+}
+$("#amt").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-value]");
+  if (!b || b.dataset.value === SETTINGS.amount) return;
+  SETTINGS.amount = b.dataset.value;
+  saveJson("settings", SETTINGS);
+  renderAmtSwitch();
+  if (!S.meta) return;
+  index(S.data);
+  route();
+});
 function applyPeriod(key) {
   try { localStorage.setItem("period", key); } catch { /* not remembered */ }
   index(S.data);

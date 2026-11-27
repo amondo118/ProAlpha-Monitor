@@ -72,13 +72,13 @@ the raw code without warnings.
 
 | View | Content |
 |---|---|
-| Top bar | Search by customer number or name (suggestions; Enter opens the customer); **period picker**; data date, MINTA tag |
+| Top bar | Search by customer number or name (suggestions; Enter opens the customer); **period picker**; **Nettó / Bruttó** switch (every amount on every page follows it; the ⚠ control totals stay net); data date, MINTA tag |
 | Áttekintés | With invoices: sales this year and last month (vs the previous year), active customers, new customers, customers without Ügyintéző; monthly sales vs the previous year; top customers; sales by Ügyintéző, industry and region (net, HUF invoices); sales per currency; new customers per month and the latest ones. Without invoices: the customer statistics |
 | Vevők | All customers (default columns: name, industry, Ügyintéző, tax no., currency, payment terms, sales this year, country, region, city) with filters and CSV export |
 | Ügyintéző page | Like the customer page: sales this year and last month vs the previous year, active and new customers, sales chart (year/half/quarter/month), their customers with sales and change, sales per currency and industry, latest new customers |
 | Customer page | Header with address and contact, KPI tiles, sales by year, open invoices with due-date status, terms, identifiers, same corporate group, data sources |
 | Értékesítés (Sales) | Button groups for range, time breakdown and net/gross; one large button per currency showing its total (currencies are never added). Sales by day / week / month / quarter / half year / year over a range (last 12 months, this year, last year, last 3 years, all, or custom dates), compared with the same period of the previous year. Net or gross, one currency at a time (other currencies are listed separately, never added). Breakdown by customer, Ügyintéző, region, industry, country or invoice issuer; filters for all of these. CSV export of the periods |
-| ⚙ Settings | Shared periods and fiscal year start (read from `config/idoszakok.toml`); per browser: custom periods (name + dates, shown in the period picker), default net/gross, the “new customer” window (days), theme, language, reset column layouts / welcome / everything |
+| ⚙ Settings | Shared periods and fiscal year start (read from `config/idoszakok.toml`); per browser: custom periods (name + dates, shown in the period picker), the “new customer” window (days), theme, language, reset column layouts / welcome / everything |
 | ? tab (next to ⚠) | Help: a short guide to the whole site (search, tabs, sales controls, sorting/moving/resizing columns, filters and links, export, data and figures, settings). On the first visit a welcome message in the corner points to it (closes with ✕ or by itself) |
 | ⚠ tab (right end of the tab bar) | Import status: warnings from the last import (searchable), stale-data alert, data sources with row counts, skipped blocked customers. The icon is grey when all is well, amber with a count when there are warnings, red when the export is overdue |
 
@@ -127,6 +127,8 @@ Other columns used (see `[szamlak.oszlopok]`):
 - Documents of blocked or unknown customers are skipped and reported.
 
 ## The viewed period
+
+Chart bars are clickable: a sales bar (dashboard, Sales tab, customer and Ügyintéző pages) opens the Sales tab on that date range with the same filters (customer, Ügyintéző, currency) and a finer breakdown, with the period's invoices listed at the bottom (sortable, CSV export); a bar of the new-customers chart opens the customers created that month. Rows of the Sales period table link the same way.
 
 The period picker in the top bar sets the period for every "this period" figure on
 the site: sales, active and new customers, offers, the Ügyintéző and customer pages,
