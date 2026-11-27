@@ -1013,29 +1013,27 @@ function managerColumns() {
   if (S.hasInvoices) {
     cols.push(
       { key: "active", label: t("mgr.col.active", { p: P.short }), num: true, value: (m) => m.active },
-      { key: "ytd", label: t("mgr.col.ytd", { p: P.short }), num: true, value: (m) => hufOf(m.ytd), html: (m) => esc(F.money(hufOf(m.ytd), "HUF")) },
+      // HUF and EUR side by side, same format; never added together
+      ...["HUF", "EUR"].map((cur) => ({ key: cur === "HUF" ? "ytd" : "ytdEUR", label: t("mgr.col.ytd", { p: P.short, cur }), num: true,
+        value: (m) => (m.ytd.get(cur) || 0) / 100, html: (m) => esc(F.money((m.ytd.get(cur) || 0) / 100, cur)) })),
       { key: "prev", label: t("mgr.col.prev"), num: true, value: (m) => hufOf(m.prev), html: (m) => `<span class="muted">${esc(F.money(hufOf(m.prev), "HUF"))}</span>` },
-      { key: "change", label: t("sales.col.change"), num: true, value: (m) => (hufOf(m.prev) ? (hufOf(m.ytd) - hufOf(m.prev)) / Math.abs(hufOf(m.prev)) : null),
-        html: (m) => changeHtml(hufOf(m.ytd), hufOf(m.prev)) },
       { key: "salesShare", label: t("mgr.col.share"), num: true, value: (m) => (totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0),
         html: (m) => esc(F.pct(totalHuf ? (m.ytd.get("HUF") || 0) / totalHuf : 0)) },
       ...(S.hasOffers ? [{ key: "offers", label: t("off.col", { p: P.short }), num: true, value: (m) => m.offersYtd,
         html: (m) => (m.offersYtd ? `<a href="${managerHref(m.key)}" title="${esc(t("off.customersN", { n: F.num(m.offerCustomers.size) }))}">${esc(F.num(m.offersYtd))}</a>` : "0") }] : []),
-      { key: "other", label: t("mgr.col.other"), value: (m) => moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))),
-        html: (m) => `<span class="muted">${esc(moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF"))))}</span>` });
+      { key: "other", label: t("mgr.col.other"), value: (m) => moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF" && c !== "EUR"))),
+        html: (m) => `<span class="muted">${esc(moneyList(new Map([...m.ytd].filter(([c]) => c !== "HUF" && c !== "EUR"))))}</span>` });
     if (S.hasPayments) cols.push({ key: "open", label: t("col.openNet"), num: true, value: (m) => hufOf(m.open), html: (m) => esc(moneyList(m.open)), csv: (m) => moneyList(m.open) });
   } else {
     cols.push({ key: "share", label: t("col.share"), num: true, value: (m) => m.count / totalCustomers, html: (m) => esc(F.pct(m.count / totalCustomers)) });
   }
   cols.push(
-    { key: "new30", label: t("col.new30"), num: true, value: (m) => m.new30, html: (m) => (m.new30 ? `<span class="badge new">${esc(F.num(m.new30))}</span>` : "0") },
-    { key: "newYtd", label: t("col.newYtd"), num: true, value: (m) => m.newYtd },
     { key: "foreign", label: t("col.foreign"), num: true, value: (m) => m.foreign },
     { key: "last", label: t("col.lastCreated"), value: (m) => m.last, html: (m) => esc(F.date(m.last)) },
   );
   return cols;
 }
-const MANAGER_TABLE = "managers-v2";
+const MANAGER_TABLE = "managers-v3";   // new column set: old saved layouts don't apply
 
 function renderManagers(main) {
   const p = current.params;
