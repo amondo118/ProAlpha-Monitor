@@ -1556,7 +1556,13 @@ function periodLabel(key, g, short = false) {
   const y = key.slice(0, 4), n = +key.slice(6);
   const roman = LANG === "hu" ? ROMAN[n - 1] : n;
   if (g === "day") return short ? new Date(key + "T00:00:00").toLocaleDateString(F.loc, { month: "short", day: "numeric" }) : F.date(key);
-  if (g === "week") return t(short ? "period.weekShort" : "period.week", { y, n });
+  if (g === "week") {
+    // a week is shown by its dates (Monday–Sunday), the week number is secondary
+    const md = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(F.loc, { month: "short", day: "numeric" });
+    const from = periodStart(key, g), to = addDays(from, 6);
+    if (short) return md(from);
+    return t("period.week", { y: from.slice(0, 4), n, from: md(from), to: md(to) });
+  }
   if (g === "month") return short ? F.month(key) : F.monthYear(key);
   if (g === "quarter") return t(short ? "period.quarterShort" : "period.quarter", { y, n: roman });
   if (g === "half") return t(short ? "period.halfShort" : "period.half", { y, n: roman });
@@ -1601,6 +1607,7 @@ function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, 
   svg += `<line class="baseline" x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}"/>`;
   const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 64))));
   const showValues = !pair && n <= 12;
+  let lastYearShown = null;
   keys.forEach((k, i) => {
     const cx = m.l + bw * i + bw / 2;
     const now = mode === "highlight" && i === n - 1 ? " now" : "";
@@ -1610,8 +1617,12 @@ function drawPeriodChart(host, { keys, g, values, prev = null, prevKeys = null, 
     } else svg += bar(cx - barW / 2, values[i], mode === "plain" ? "bar now" : `bar${now}`);
     if (showValues && values[i]) svg += `<text class="value-label${now}" x="${cx}" y="${values[i] >= 0 ? y(values[i]) - 8 : y(values[i]) + 14}" text-anchor="middle">${esc(F.axis(values[i]))}</text>`;
     if (i % every === 0) {
-      const newYear = g !== "year" && (i === 0 || keys[i - 1].slice(0, 4) !== k.slice(0, 4));
-      const text = g === "year" ? k : `${newYear ? k.slice(0, 4) + " " : ""}${periodLabel(k, g, true)}`;
+      // the year of a week is the year of its Monday (ISO week 1 can start in December)
+      const yearOf = (key) => (g === "week" ? periodStart(key, g) : key).slice(0, 4);
+      // shown on the first label of each year (labels may skip the bar where the year starts)
+      const newYear = g !== "year" && yearOf(k) !== lastYearShown;
+      lastYearShown = yearOf(k);
+      const text = g === "year" ? k : `${newYear ? yearOf(k) + " " : ""}${periodLabel(k, g, true)}`;
       svg += `<text class="${g === "year" ? `year-label${now}` : "axis-label"}" x="${cx}" y="${H - 8}" text-anchor="middle">${esc(text)}</text>`;
     }
     const tipLines = [periodLabel(k, g), F.money(values[i], cur)];
