@@ -972,12 +972,45 @@ function renderOverview(main) {
         <div class="card-foot">${esc(t("ov.curNote"))}</div></section>
     </div>
     <div class="grid-2">
-      ${newChartCard}
-      ${latestCard}
+      ${moversCard()}
+      ${lostCard()}
     </div>`;
   drawPeriodChart($("#ov-monthly"), { keys, g, values: keys.map((k) => per.get(k).v / 100), prev: P.prevFrom ? keys.map((k) => per.get(k).prev / 100) : null,
     prevKeys, cur: "HUF", mode: "compare", label: t("ov.monthly"), href: (k) => bucketHref(k, g, { cur: "HUF" }, P) });
-  drawMonthly($("#monthly"), all);
+}
+
+/* Dashboard: customers whose sales (HUF) changed most against the previous period. */
+function moversCard() {
+  const head = `<div class="card-head"><h2>${esc(t("ov.movers", { p: P.short }))}</h2><span class="sub">${esc(`${amtWord()}, HUF`)}</span></div>`;
+  if (!P.prevFrom) return `<section class="card">${head}<div class="empty-state">${esc(t("sales.noCompare"))}</div></section>`;
+  const diffs = S.customers.map((c) => ({ c, v: c.st.ytd.get("HUF") || 0, p: c.st.prev.get("HUF") || 0 })).map((x) => ({ ...x, d: x.v - x.p }));
+  const up = diffs.filter((x) => x.d > 0).sort((a, b) => b.d - a.d).slice(0, 5);
+  const down = diffs.filter((x) => x.d < 0).sort((a, b) => a.d - b.d).slice(0, 5);
+  const money = (c) => compactMoney(c / 100, "HUF");
+  const row = (x) => `<tr><td class="wrap">${custLink(x.c)}</td><td class="num">${esc(money(x.v))}</td><td class="num muted">${esc(money(x.p))}</td>
+    <td class="num"><span class="${x.d >= 0 ? "delta-up" : "delta-down"}">${esc((x.d > 0 ? "+" : "") + money(x.d))}</span></td></tr>`;
+  const group = (label, list) => `<tr class="group-row"><th colspan="4">${esc(label)}</th></tr>${list.map(row).join("") || `<tr class="empty-row"><td colspan="4">${esc(t("t.empty"))}</td></tr>`}`;
+  return `<section class="card">${head}
+    <div class="table-wrap plain"><table>
+      <thead><tr><th>${esc(t("off.customer"))}</th><th class="num">${esc(P.short)}</th><th class="num">${esc(t("sales.prevYear"))}</th><th class="num">${esc(t("sales.col.change"))}</th></tr></thead>
+      <tbody>${group(t("ov.moversUp"), up)}${group(t("ov.moversDown"), down)}</tbody></table></div>
+    <div class="card-foot"><a href="#sales?by=customer">${esc(t("ov.details"))}</a></div></section>`;
+}
+
+/* Dashboard: customers who bought in the previous period but not in this one. */
+function lostCard() {
+  const head = (n) => `<div class="card-head"><h2>${esc(t("ov.lost", { p: P.short }))}</h2><span class="sub">${esc(n == null ? "" : t("ov.lostN", { n: F.num(n) }))}</span></div>`;
+  if (!P.prevFrom) return `<section class="card">${head()}<div class="empty-state">${esc(t("sales.noCompare"))}</div></section>`;
+  const lost = S.customers.filter((c) => c.st.prevCount && !c.st.ytdCount && !c.st.ytdCredits)
+    .map((c) => ({ c, p: c.st.prev.get(c.st.cur) || 0, last: c.invoices.find((i) => i.date)?.date }))
+    .sort((a, b) => (b.c.st.prev.get("HUF") || 0) - (a.c.st.prev.get("HUF") || 0) || b.p - a.p);
+  return `<section class="card">${head(lost.length)}
+    ${lost.length ? `<div class="table-wrap plain" style="max-height:420px;overflow:auto"><table>
+      <thead><tr><th>${esc(t("off.customer"))}</th><th>${esc(t("col.manager"))}</th><th class="num">${esc(t("sales.prevYear"))}</th><th>${esc(t("ov.lastInvoice"))}</th></tr></thead>
+      <tbody>${lost.map((x) => `<tr><td class="wrap">${custLink(x.c)}</td><td>${pmLink(pmKey(x.c))}</td>
+        <td class="num">${esc(compactMoney(x.p / 100, x.c.st.cur))}</td><td>${esc(F.date(x.last))}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty-state">${esc(t("ov.lostNone"))}</div>`}
+    <div class="card-foot">${esc(t("ov.lostNote"))}</div></section>`;
 }
 
 /* New customers per month, last 24 months. Single series, SVG sized to its container. */

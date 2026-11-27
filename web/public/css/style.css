@@ -386,3 +386,4 @@ button.small { padding: 4px 10px; font-size: 12px; }
 #sales-inv-card .card-head .sub { margin-right: auto; }
 .cust-chip { display: inline-flex; align-items: center; gap: 6px; }
 .cust-chip .link-btn { padding: 0 2px; }
+.group-row th { text-align: left; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); padding-top: 12px; background: transparent; }
